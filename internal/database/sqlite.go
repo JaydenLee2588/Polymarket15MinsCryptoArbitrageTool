@@ -269,6 +269,23 @@ func UpdateTradeResolution(id int64, resolution string, pnl float64) error {
 	return err
 }
 
+// DeleteAllTrades 删除所有模拟交易记录
+func DeleteAllTrades() error {
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	_, err := db.Exec("DELETE FROM simulation_trades")
+	if err != nil {
+		return fmt.Errorf("无法清空模拟交易表: %w", err)
+	}
+
+	// 此时也可以选择重置自增 ID，但在 SQLite 中通常没有必要，
+	// 还可以执行 VACUUM 来回收空间，视需求而定。
+	// 这里简单执行删除即可。
+
+	return nil
+}
+
 // GetUnresolvedTrades 获取未决议的交易
 func GetUnresolvedTrades() ([]*SimulationTrade, error) {
 	dbMu.RLock()
