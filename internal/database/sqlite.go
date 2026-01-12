@@ -54,14 +54,12 @@ func InitDB(dbPath string) error {
 
 // createTables 创建必要的数据库表
 func createTables() error {
-	// 模拟交易表
+	// 模拟交易表 (简化版)
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS simulation_trades (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			strategy_type TEXT NOT NULL DEFAULT 'type2',
 			config_group TEXT DEFAULT 'default',
 			market_slug TEXT NOT NULL,
-			symbol TEXT,
 			stage TEXT NOT NULL DEFAULT 'Leg1',
 			side TEXT NOT NULL,
 			price REAL NOT NULL,
@@ -69,8 +67,8 @@ func createTables() error {
 			cost REAL NOT NULL,
 			pnl REAL DEFAULT 0,
 			final_resolution TEXT,
-			binance_price REAL,
 			trend_percent REAL,
+			fair_price REAL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
@@ -82,9 +80,117 @@ func createTables() error {
 	// 创建索引
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_slug ON simulation_trades(market_slug)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_config ON simulation_trades(config_group)`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy ON simulation_trades(strategy_type)`)
+
+	// 迁移: 添加 fair_price 列 (如果不存在)
+	db.Exec(`ALTER TABLE simulation_trades ADD COLUMN fair_price REAL`)
+
+	// 迁移: 删除旧列 (SQLite 不支持 DROP COLUMN，使用重建表的方式)
+	cleanupOldColumns()
 
 	return nil
+}
+
+// cleanupOldColumns 清理旧列 (strategy_type, symbol, binance_price)
+func cleanupOldColumns() {
+	// 检查是否存在旧列
+	rows, err := db.Query(`PRAGMA table_info(simulation_trades)`)
+	if err != nil {
+		return
+	}
+
+	hasOldColumns := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			continue
+		}
+		if name == "strategy_type" || name == "symbol" || name == "binance_price" {
+			hasOldColumns = true
+			break
+		}
+	}
+	rows.Close() // 必须在开始事务前关闭
+
+	if !hasOldColumns {
+		return
+	}
+
+	log.Println("🛠️ 检测到旧列，正在迁移数据库...")
+
+	// SQLite 不支持 DROP COLUMN，需要重建表
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("⚠️ 迁移失败 (开始事务): %v", err)
+		return
+	}
+
+	// 1. 创建新表
+	_, err = tx.Exec(`
+		CREATE TABLE simulation_trades_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			config_group TEXT DEFAULT 'default',
+			market_slug TEXT NOT NULL,
+			stage TEXT NOT NULL DEFAULT 'Leg1',
+			side TEXT NOT NULL,
+			price REAL NOT NULL,
+			amount REAL NOT NULL,
+			cost REAL NOT NULL,
+			pnl REAL DEFAULT 0,
+			final_resolution TEXT,
+			trend_percent REAL,
+			fair_price REAL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("⚠️ 迁移失败 (创建新表): %v", err)
+		return
+	}
+
+	// 2. 复制数据
+	_, err = tx.Exec(`
+		INSERT INTO simulation_trades_new 
+		(id, config_group, market_slug, stage, side, price, amount, cost, pnl, final_resolution, trend_percent, fair_price, created_at, updated_at)
+		SELECT id, config_group, market_slug, stage, side, price, amount, cost, pnl, final_resolution, trend_percent, NULL, created_at, updated_at
+		FROM simulation_trades
+	`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("⚠️ 迁移失败 (复制数据): %v", err)
+		return
+	}
+
+	// 3. 删除旧表
+	_, err = tx.Exec(`DROP TABLE simulation_trades`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("⚠️ 迁移失败 (删除旧表): %v", err)
+		return
+	}
+
+	// 4. 重命名新表
+	_, err = tx.Exec(`ALTER TABLE simulation_trades_new RENAME TO simulation_trades`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("⚠️ 迁移失败 (重命名): %v", err)
+		return
+	}
+
+	// 5. 重建索引
+	tx.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_slug ON simulation_trades(market_slug)`)
+	tx.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_config ON simulation_trades(config_group)`)
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("⚠️ 迁移失败 (提交): %v", err)
+		return
+	}
+
+	log.Println("✅ 数据库迁移完成，已删除旧列")
 }
 
 // GetDB 获取数据库实例
@@ -107,10 +213,8 @@ func CloseDB() error {
 // SimulationTrade 模拟交易记录
 type SimulationTrade struct {
 	ID              int64
-	StrategyType    string
 	ConfigGroup     string
 	MarketSlug      string
-	Symbol          string
 	Stage           string
 	Side            string
 	Price           float64
@@ -118,8 +222,8 @@ type SimulationTrade struct {
 	Cost            float64
 	PnL             float64
 	FinalResolution string
-	BinancePrice    float64
 	TrendPercent    float64
+	FairPrice       float64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -131,21 +235,19 @@ func InsertTrade(trade *SimulationTrade) (int64, error) {
 
 	result, err := db.Exec(`
 		INSERT INTO simulation_trades 
-		(strategy_type, config_group, market_slug, symbol, stage, side, price, amount, cost, pnl, binance_price, trend_percent)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(config_group, market_slug, stage, side, price, amount, cost, pnl, trend_percent, fair_price)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		trade.StrategyType,
 		trade.ConfigGroup,
 		trade.MarketSlug,
-		trade.Symbol,
 		trade.Stage,
 		trade.Side,
 		trade.Price,
 		trade.Amount,
 		trade.Cost,
 		trade.PnL,
-		trade.BinancePrice,
 		trade.TrendPercent,
+		trade.FairPrice,
 	)
 	if err != nil {
 		return 0, err
@@ -173,8 +275,8 @@ func GetUnresolvedTrades() ([]*SimulationTrade, error) {
 	defer dbMu.RUnlock()
 
 	rows, err := db.Query(`
-		SELECT id, strategy_type, config_group, market_slug, symbol, stage, side, price, amount, cost, pnl, 
-		       COALESCE(final_resolution, '') as final_resolution, binance_price, trend_percent, created_at
+		SELECT id, config_group, market_slug, stage, side, price, amount, cost, pnl, 
+		       COALESCE(final_resolution, '') as final_resolution, COALESCE(trend_percent, 0), created_at
 		FROM simulation_trades 
 		WHERE final_resolution IS NULL OR final_resolution = ''
 		ORDER BY created_at DESC
@@ -188,9 +290,9 @@ func GetUnresolvedTrades() ([]*SimulationTrade, error) {
 	for rows.Next() {
 		t := &SimulationTrade{}
 		err := rows.Scan(
-			&t.ID, &t.StrategyType, &t.ConfigGroup, &t.MarketSlug, &t.Symbol,
+			&t.ID, &t.ConfigGroup, &t.MarketSlug,
 			&t.Stage, &t.Side, &t.Price, &t.Amount, &t.Cost, &t.PnL,
-			&t.FinalResolution, &t.BinancePrice, &t.TrendPercent, &t.CreatedAt,
+			&t.FinalResolution, &t.TrendPercent, &t.CreatedAt,
 		)
 		if err != nil {
 			continue
@@ -201,7 +303,7 @@ func GetUnresolvedTrades() ([]*SimulationTrade, error) {
 }
 
 // GetTradeStats 获取交易统计
-func GetTradeStats(strategyType string) (tradeCount int, totalPnL float64, winCount int, err error) {
+func GetTradeStats() (tradeCount int, totalPnL float64, winCount int, err error) {
 	dbMu.RLock()
 	defer dbMu.RUnlock()
 
@@ -209,15 +311,15 @@ func GetTradeStats(strategyType string) (tradeCount int, totalPnL float64, winCo
 		SELECT 
 			COUNT(*) as trade_count,
 			COALESCE(SUM(pnl), 0) as total_pnl,
-			SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as win_count
+			COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0) as win_count
 		FROM simulation_trades
 		WHERE final_resolution IS NOT NULL AND final_resolution != ''
 	`
-	if strategyType != "" {
-		query += " AND strategy_type = ?"
-		err = db.QueryRow(query, strategyType).Scan(&tradeCount, &totalPnL, &winCount)
+	err = db.QueryRow(query).Scan(&tradeCount, &totalPnL, &winCount)
+	if err != nil {
+		log.Printf("⚠️ [GetTradeStats] 查询失败: %v", err)
 	} else {
-		err = db.QueryRow(query).Scan(&tradeCount, &totalPnL, &winCount)
+		log.Printf("📊 [GetTradeStats] 查询结果: count=%d, pnl=%.2f, win=%d", tradeCount, totalPnL, winCount)
 	}
 	return
 }
@@ -236,7 +338,7 @@ func GetTradeStatsByConfig() (map[string]struct {
 			config_group,
 			COUNT(*) as trade_count,
 			COALESCE(SUM(pnl), 0) as total_pnl,
-			SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as win_count
+			COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0) as win_count
 		FROM simulation_trades
 		WHERE final_resolution IS NOT NULL AND final_resolution != ''
 		GROUP BY config_group
@@ -266,4 +368,28 @@ func GetTradeStatsByConfig() (map[string]struct {
 	}
 
 	return result, nil
+}
+
+// GetEarliestTradeTime 获取最早的交易时间
+func GetEarliestTradeTime() (time.Time, error) {
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	var earliest string
+	err := db.QueryRow(`SELECT MIN(created_at) FROM simulation_trades`).Scan(&earliest)
+	if err != nil || earliest == "" {
+		return time.Time{}, err
+	}
+
+	// 解析时间
+	t, err := time.Parse("2006-01-02 15:04:05", earliest)
+	if err != nil {
+		// 尝试带时区格式
+		t, err = time.Parse(time.RFC3339, earliest)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+
+	return t, nil
 }

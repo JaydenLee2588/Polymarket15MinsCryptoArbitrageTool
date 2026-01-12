@@ -127,9 +127,9 @@ func (t *TelegramBot) handleStart(message *tgbotapi.Message) string {
 
 *可用命令:*
 • /start - 显示此帮助
-• /sim_stats - 查看模拟交易统计
+• /sim\_stats - 查看模拟交易统计
 
-📊 使用 /sim_stats 查看当前交易表现。`, userName)
+📊 使用 /sim\_stats 查看当前交易表现。`, userName)
 }
 
 // handleSimStats 处理 /sim_stats 命令
@@ -163,6 +163,8 @@ func (t *TelegramBot) handleSimStats() string {
 			WinCount    int     `json:"win_count"`
 			WinRate     float64 `json:"win_rate"`
 		} `json:"config_breakdown"`
+		StartTime string `json:"start_time"`
+		Uptime    string `json:"uptime"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -177,13 +179,18 @@ func (t *TelegramBot) handleSimStats() string {
 	var output strings.Builder
 	output.WriteString("📊 *模拟交易统计*\n\n")
 
+	// 显示已启动时间
+	if result.Uptime != "" {
+		output.WriteString(fmt.Sprintf("⏱️ 已启动: %s\n\n", result.Uptime))
+	}
+
 	// 总体统计
 	pnlEmoji := "📈"
 	if result.Summary.TotalPnL < 0 {
 		pnlEmoji = "📉"
 	}
 
-	output.WriteString(fmt.Sprintf("*总体表现:*\n"))
+	output.WriteString("*总体表现:*\n")
 	output.WriteString(fmt.Sprintf("   交易次数: %d\n", result.Summary.TradeCount))
 	output.WriteString(fmt.Sprintf("   %s 总 PnL: $%.2f\n", pnlEmoji, result.Summary.TotalPnL))
 	output.WriteString(fmt.Sprintf("   胜率: %.1f%%\n\n", result.Summary.WinRate*100))

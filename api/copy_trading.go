@@ -45,8 +45,8 @@ func CopyTradingHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 构建 Type2 配置
-	baseConfig := Type2Config{
+	// 构建策略配置
+	baseConfig := StrategyConfig{
 		ID:                   "default",
 		MinTrendPercentUp:    getEnvFloat("TYPE2_MIN_TREND_PERCENT_UP", 0.0025),
 		MinTrendPercentDown:  getEnvFloat("TYPE2_MIN_TREND_PERCENT_DOWN", 0.0020),
@@ -66,19 +66,19 @@ func CopyTradingHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 获取配置列表
-	configs := GetOrLoadType2Configs(baseConfig)
+	configs := GetOrLoadConfigs(baseConfig)
 	configCount := len(configs)
 
 	var message string
-	started := StartType2MultiConfigSimulation(configs)
+	started := StartSimulation(configs)
 	if started {
 		if configCount > 1 {
-			message = "Started Type2 Multi-Config Simulation (Background)"
+			message = "Started Multi-Config Simulation (Background)"
 		} else {
-			message = "Started Type2 Simulation (Background)"
+			message = "Started Simulation (Background)"
 		}
 	} else {
-		message = "Type2 Simulation is already running"
+		message = "Simulation is already running"
 	}
 
 	// 返回 JSON 响应

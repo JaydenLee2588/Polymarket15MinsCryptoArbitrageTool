@@ -2,18 +2,19 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"Polymarket15MinsCryptoArbitrageTool/internal/database"
 )
 
 // SimulationStats 模拟交易统计
 type SimulationStats struct {
-	StrategyType string  `json:"strategy_type"`
-	TradeCount   int     `json:"trade_count"`
-	TotalPnL     float64 `json:"total_pnl"`
-	WinCount     int     `json:"win_count"`
-	WinRate      float64 `json:"win_rate"`
+	TradeCount int     `json:"trade_count"`
+	TotalPnL   float64 `json:"total_pnl"`
+	WinCount   int     `json:"win_count"`
+	WinRate    float64 `json:"win_rate"`
 }
 
 // ConfigStats 配置组统计
@@ -31,20 +32,15 @@ type SimulationStatsResponse struct {
 	Data            map[string]SimulationStats `json:"data"`
 	Summary         SimulationStats            `json:"summary"`
 	ConfigBreakdown map[string]ConfigStats     `json:"config_breakdown"`
+	Uptime          string                     `json:"uptime,omitempty"` // 已启动时间
 }
 
 // SimulationStatsHandler 模拟跟单收益统计 API
 func SimulationStatsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// 获取类型参数
-	strategyType := r.URL.Query().Get("type")
-	if strategyType == "2" {
-		strategyType = "type2"
-	}
-
 	// 获取总体统计
-	tradeCount, totalPnL, winCount, err := database.GetTradeStats(strategyType)
+	tradeCount, totalPnL, winCount, err := database.GetTradeStats()
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -59,11 +55,10 @@ func SimulationStatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := SimulationStats{
-		StrategyType: "type2",
-		TradeCount:   tradeCount,
-		TotalPnL:     totalPnL,
-		WinCount:     winCount,
-		WinRate:      winRate,
+		TradeCount: tradeCount,
+		TotalPnL:   totalPnL,
+		WinCount:   winCount,
+		WinRate:    winRate,
 	}
 
 	// 获取配置组统计
@@ -85,11 +80,25 @@ func SimulationStatsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 获取最早交易时间并计算已启动时间
+	var uptimeStr string
+	if earliest, err := database.GetEarliestTradeTime(); err == nil && !earliest.IsZero() {
+		duration := time.Since(earliest)
+		hours := int(duration.Hours())
+		minutes := int(duration.Minutes()) % 60
+		if hours > 0 {
+			uptimeStr = fmt.Sprintf("%d小时%d分钟", hours, minutes)
+		} else {
+			uptimeStr = fmt.Sprintf("%d分钟", minutes)
+		}
+	}
+
 	response := SimulationStatsResponse{
 		Success:         true,
 		Data:            map[string]SimulationStats{"2": summary},
 		Summary:         summary,
 		ConfigBreakdown: configBreakdown,
+		Uptime:          uptimeStr,
 	}
 
 	json.NewEncoder(w).Encode(response)

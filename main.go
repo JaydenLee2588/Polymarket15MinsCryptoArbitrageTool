@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"Polymarket15MinsCryptoArbitrageTool/api"
 	"Polymarket15MinsCryptoArbitrageTool/bot"
@@ -18,7 +22,7 @@ import (
 func main() {
 	// 加载环境变量
 	if err := godotenv.Load(); err != nil {
-		log.Println("未找到 .env 文件，使用系统环境变量")
+		log.Printf("⚠️ 加载 .env 文件失败: %v (使用系统环境变量)", err)
 	}
 
 	// 初始化内部 SQLite 数据库
@@ -91,12 +95,35 @@ func main() {
 	port := getEnv("PORT", "8090")
 	addr := fmt.Sprintf("%s:%s", host, port)
 
-	log.Printf("🚀 服务器启动在 http://%s", addr)
-	log.Printf("📝 API 测试页面: http://%s/api/", addr)
-
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("❌ 服务器启动失败: %v", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
 	}
+
+	// 启动服务器 goroutine
+	go func() {
+		log.Printf("🚀 服务器启动在 http://%s", addr)
+		log.Printf("📝 API 测试页面: http://%s/api/", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("❌ 服务器启动失败: %v", err)
+		}
+	}()
+
+	// 等待中断信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+	log.Println("🛑 正在关闭服务器...")
+
+	// 创建 5 秒超时的 context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("❌ 服务器强制关闭: %v", err)
+	}
+
+	log.Println("✅ 服务器已优雅退出")
 }
 
 // getEnv 获取环境变量，如果未设置则返回默认值

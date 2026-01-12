@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,15 +47,19 @@ var (
 	lastPriceUpdateMu   sync.Mutex
 	priceUpdateCount    int64
 	priceUpdateCountMu  sync.Mutex
+
+	// 真实交易客户端
+	clobOrderClient *src.ClobOrderClient
+	clobClientMu    sync.Mutex
 )
 
-// StartType2MultiConfigSimulation 启动多配置模拟 (幂等)
-func StartType2MultiConfigSimulation(configs []Type2Config) bool {
+// StartSimulation 启动多配置模拟 (幂等)
+func StartSimulation(configs []StrategyConfig) bool {
 	simMu.Lock()
 	defer simMu.Unlock()
 
 	if isSimRunning {
-		log.Println("⚠️ Type2 策略模拟已在运行。")
+		log.Println("⚠️ 策略模拟已在运行。")
 		return false
 	}
 
@@ -62,20 +68,76 @@ func StartType2MultiConfigSimulation(configs []Type2Config) bool {
 		return false
 	}
 
+	// 检查是否有配置使用真实交易模式
+	hasRealMode := false
+	for _, cfg := range configs {
+		if cfg.TradingMode == "real" {
+			hasRealMode = true
+			break
+		}
+	}
+
+	// 如果有真实交易模式，初始化 ClobOrderClient
+	if hasRealMode {
+		privateKey := os.Getenv("POLYMARKET_PRIVATE_KEY")
+		if privateKey == "" {
+			log.Println("❌ 真实交易模式需要 POLYMARKET_PRIVATE_KEY 环境变量")
+			return false
+		}
+
+		// 创建 CLOB 订单客户端
+		client, err := src.NewClobOrderClient(privateKey)
+		if err != nil {
+			log.Printf("❌ 创建 ClobOrderClient 失败: %v", err)
+			return false
+		}
+
+		// 派生 API 凭证
+		authClient, err := src.NewAuthClient(privateKey)
+		if err != nil {
+			log.Printf("❌ 创建 AuthClient 失败: %v", err)
+			return false
+		}
+
+		creds, err := authClient.DeriveAPICredentials(context.Background())
+		if err != nil {
+			log.Printf("❌ 派生 API 凭证失败: %v", err)
+			return false
+		}
+
+		// 设置凭证到客户端
+		client.SetCredentials(creds)
+
+		// 设置全局客户端
+		clobClientMu.Lock()
+		clobOrderClient = client
+		clobClientMu.Unlock()
+
+		log.Printf("✅ 真实交易模式已启用，钱包地址: %s", client.GetAddress())
+	}
+
 	isSimRunning = true
 	go runSimulationLoop(configs)
-	log.Printf("🚀 Type2 策略模拟已启动 - %d 个配置组", len(configs))
+	log.Printf("🚀 策略模拟已启动 - %d 个配置组", len(configs))
 
 	for _, cfg := range configs {
-		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, MinPriceEdge=%.2f",
-			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, cfg.MinPriceEdge)
+		modeTag := "模拟"
+		if cfg.TradingMode == "real" {
+			modeTag = "💰真实"
+		}
+		orderTypeTag := "市价"
+		if cfg.OrderType == "limit" {
+			orderTypeTag = "挂单"
+		}
+		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s",
+			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeTag)
 	}
 
 	return true
 }
 
 // runSimulationLoop 模拟循环
-func runSimulationLoop(configs []Type2Config) {
+func runSimulationLoop(configs []StrategyConfig) {
 	// 1. 初始化 Polymarket WebSocket
 	sdk := src.New(src.WithLogger(src.NewSilentLogger()))
 
@@ -128,7 +190,10 @@ func runSimulationLoop(configs []Type2Config) {
 	// 初始扫描
 	scanAndSubscribe(sdk, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
 
-	log.Println("💓 [启动心跳] Type2 策略已启动，进入主循环...")
+	// 启动时检查等待决议的交易
+	loadPendingFromDatabase(gammaClient, allPendingResolutions, configs)
+
+	log.Println("💓 [启动心跳] 策略已启动，进入主循环...")
 
 	for {
 		select {
@@ -207,7 +272,7 @@ func scanAndSubscribe(
 	sdk *src.WsClientWrapper,
 	gammaClient *src.Client,
 	allConfigStates map[string]map[string]*MarketState,
-	configs []Type2Config,
+	configs []StrategyConfig,
 	targets []string,
 	sharedMarketTokens map[string]map[string]string,
 ) {
@@ -310,9 +375,10 @@ type MarketInfo struct {
 	StartTime     time.Time
 	EndTime       time.Time
 	TokenIDToSide map[string]string
+	SideToTokenID map[string]string // 反向映射，用于真实下单
 }
 
-// scanNewMarkets 扫描新市场
+// scanNewMarkets 扫描新市场 (采用两步获取模式)
 func scanNewMarkets(
 	client *src.Client,
 	existingMarkets map[string]map[string]string,
@@ -320,58 +386,135 @@ func scanNewMarkets(
 	windowMin int,
 ) []MarketInfo {
 	var newMarkets []MarketInfo
+	now := time.Now()
+
+	// Slug 前缀到 Target 名称的映射
+	prefixToTarget := map[string]string{
+		"btc-updown-15m": "Bitcoin",
+		"eth-updown-15m": "Ethereum",
+		"sol-updown-15m": "Solana",
+		"xrp-updown-15m": "XRP",
+	}
 
 	for _, target := range targets {
-		query := fmt.Sprintf("%s Up or Down", target)
-		markets, err := client.SearchMarkets(query, src.MarketFilterActive, true)
-		if err != nil {
+		// 构造更精确的搜索查询 (与 FKGoPolyTools 一致)
+		var searchQuery string
+		switch target {
+		case "Bitcoin":
+			searchQuery = "btc updown 15m"
+		case "Ethereum":
+			searchQuery = "eth updown 15m"
+		case "Solana":
+			searchQuery = "sol updown 15m"
+		case "XRP":
+			searchQuery = "xrp updown 15m"
+		default:
 			continue
 		}
 
-		for _, m := range markets {
-			tokens := m.GetTokens()
-			if m.Closed || !m.Active || len(tokens) < 2 {
+		// 第一步：搜索获取事件
+		resp, err := client.Search(context.Background(), &src.SearchParams{
+			Q:            searchQuery,
+			EventsStatus: "active",
+		})
+		if err != nil {
+			log.Printf("⚠️ %s 搜索失败: %v", target, err)
+			continue
+		}
+
+		if len(resp.Events) == 0 {
+			log.Printf("⚠️ %s 搜索无结果 (query: %s)", target, searchQuery)
+			continue
+		}
+
+		// 遍历事件
+		foundForTarget := 0
+		for _, event := range resp.Events {
+			// 必须是 15m 市场
+			if !strings.Contains(event.Slug, "15m") {
 				continue
 			}
 
-			// 检查是否是15分钟窗口市场
-			if !strings.Contains(m.Slug, "-") {
+			// 必须匹配目标币种前缀
+			matched := false
+			for prefix, t := range prefixToTarget {
+				if strings.HasPrefix(event.Slug, prefix) && t == target {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
 
-			parts := strings.Split(m.Slug, "-")
+			// 解析时间戳
+			parts := strings.Split(event.Slug, "-")
 			if len(parts) < 4 {
 				continue
 			}
-
 			ts, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
 			if err != nil {
 				continue
 			}
-
 			windowStart := time.Unix(ts, 0)
 			windowEnd := windowStart.Add(15 * time.Minute)
-			now := time.Now()
 
-			// 检查时间窗口
-			if now.After(windowEnd) {
-				continue
-			}
-			if now.Before(windowStart.Add(-time.Duration(windowMin) * time.Minute)) {
+			// 必须是当前活跃窗口
+			if now.Before(windowStart) || now.After(windowEnd) {
 				continue
 			}
 
 			// 检查是否已存在
-			if _, exists := existingMarkets[m.Slug]; exists {
+			if _, exists := existingMarkets[event.Slug]; exists {
 				continue
 			}
 
-			// 解析 Token 方向
+			// 第二步：获取完整市场详情
+			markets, err := client.GetMarkets(context.Background(), &src.GetMarketsParams{Slug: []string{event.Slug}})
+			if err != nil || len(markets) == 0 {
+				log.Printf("⚠️ 获取市场详情失败: %s, err: %v", event.Slug, err)
+				continue
+			}
+
+			m := markets[0]
+
+			// 基础验证
+			if !m.Active || m.Closed {
+				continue
+			}
+
+			// 解析 ClobTokenIds
+			tokenIDs := []string(m.ClobTokenIDs)
+			if len(tokenIDs) != 2 {
+				log.Printf("⚠️ 跳过 %s: 期望 2 个 TokenID, 实际得到 %d 个", m.Slug, len(tokenIDs))
+				continue
+			}
+
+			// 动态 Side 映射：根据 Outcomes 文本判断 UP/DOWN
 			tokenIDToSide := make(map[string]string)
-			for _, token := range tokens {
-				outcome := strings.ToUpper(token.Outcome)
-				if outcome == "UP" || outcome == "DOWN" {
-					tokenIDToSide[token.TokenID] = outcome
+			for i, outcome := range m.Outcomes {
+				if i >= len(tokenIDs) {
+					break
+				}
+				lowOutcome := strings.ToLower(outcome)
+				side := "DOWN" // 默认
+				if strings.Contains(lowOutcome, "up") || strings.Contains(lowOutcome, "yes") || strings.Contains(lowOutcome, "over") || strings.Contains(lowOutcome, "above") {
+					side = "UP"
+				}
+				tokenIDToSide[tokenIDs[i]] = side
+			}
+
+			// 检查映射冲突
+			if len(tokenIDs) == 2 {
+				side0 := tokenIDToSide[tokenIDs[0]]
+				side1 := tokenIDToSide[tokenIDs[1]]
+				if side0 == side1 {
+					if side0 == "DOWN" {
+						tokenIDToSide[tokenIDs[0]] = "UP"
+					} else {
+						tokenIDToSide[tokenIDs[1]] = "DOWN"
+					}
+					log.Printf("⚠️ 检测到 Side 映射冲突，已强制修正")
 				}
 			}
 
@@ -379,17 +522,110 @@ func scanNewMarkets(
 				continue
 			}
 
+			foundForTarget++
 			symbol := extractSymbol(target)
+
+			// 构建反向映射 (Side -> TokenID)
+			sideToTokenID := make(map[string]string)
+			for tid, side := range tokenIDToSide {
+				sideToTokenID[side] = tid
+			}
+
 			market := MarketInfo{
 				Slug:          m.Slug,
 				Symbol:        symbol,
 				StartTime:     windowStart,
 				EndTime:       windowEnd,
 				TokenIDToSide: tokenIDToSide,
+				SideToTokenID: sideToTokenID,
 			}
 			newMarkets = append(newMarkets, market)
 
 			log.Printf("📊 发现新市场: %s [%s] 结束于 %s", m.Slug, symbol, windowEnd.Format("15:04"))
+		}
+
+		// 如果搜索没找到，尝试直接构造当前窗口的 slug
+		if foundForTarget == 0 {
+			currentWindow := now.Truncate(15 * time.Minute)
+			timestamp := currentWindow.Unix()
+
+			var prefix string
+			switch target {
+			case "Bitcoin":
+				prefix = "btc-updown-15m"
+			case "Ethereum":
+				prefix = "eth-updown-15m"
+			case "Solana":
+				prefix = "sol-updown-15m"
+			case "XRP":
+				prefix = "xrp-updown-15m"
+			}
+
+			if prefix != "" {
+				slug := fmt.Sprintf("%s-%d", prefix, timestamp)
+
+				// 检查是否已存在
+				if _, exists := existingMarkets[slug]; exists {
+					continue
+				}
+
+				markets, err := client.GetMarkets(context.Background(), &src.GetMarketsParams{Slug: []string{slug}})
+				if err == nil && len(markets) > 0 {
+					m := markets[0]
+					if m.Active && !m.Closed {
+						tokenIDs := []string(m.ClobTokenIDs)
+						if len(tokenIDs) == 2 {
+							log.Printf("📊 通过直接构造发现市场: %s", m.Slug)
+
+							// 动态 Side 映射：根据 Outcomes 文本判断 UP/DOWN (与 FKGoPolyTools 一致)
+							tokenIDToSide := make(map[string]string)
+							for i, outcome := range m.Outcomes {
+								if i >= len(tokenIDs) {
+									break
+								}
+								lowOutcome := strings.ToLower(outcome)
+								side := "DOWN" // 默认
+								if strings.Contains(lowOutcome, "up") || strings.Contains(lowOutcome, "yes") || strings.Contains(lowOutcome, "over") || strings.Contains(lowOutcome, "above") {
+									side = "UP"
+								}
+								tokenIDToSide[tokenIDs[i]] = side
+							}
+
+							// 检查映射冲突
+							if len(tokenIDs) == 2 {
+								side0 := tokenIDToSide[tokenIDs[0]]
+								side1 := tokenIDToSide[tokenIDs[1]]
+								if side0 == side1 {
+									if side0 == "DOWN" {
+										tokenIDToSide[tokenIDs[0]] = "UP"
+									} else {
+										tokenIDToSide[tokenIDs[1]] = "DOWN"
+									}
+									log.Printf("⚠️ 检测到 Side 映射冲突，已强制修正")
+								}
+							}
+
+							symbol := extractSymbol(target)
+
+							// 构建反向映射 (Side -> TokenID)
+							sideToTokenID := make(map[string]string)
+							for tid, side := range tokenIDToSide {
+								sideToTokenID[side] = tid
+							}
+
+							market := MarketInfo{
+								Slug:          m.Slug,
+								Symbol:        symbol,
+								StartTime:     currentWindow,
+								EndTime:       currentWindow.Add(15 * time.Minute),
+								TokenIDToSide: tokenIDToSide,
+								SideToTokenID: sideToTokenID,
+							}
+							newMarkets = append(newMarkets, market)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -413,7 +649,7 @@ func extractSymbol(target string) string {
 }
 
 // checkBinanceArbitrage 检查 Binance 套利机会 (Leg1)
-func checkBinanceArbitrage(state *MarketState, config Type2Config) {
+func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	// 已经有持仓，跳过
 	if state.Leg1Filled {
 		return
@@ -453,23 +689,39 @@ func checkBinanceArbitrage(state *MarketState, config Type2Config) {
 	// 获取 Polymarket 价格
 	price, ok := state.LatestPrices[targetSide]
 	if !ok || price <= 0 {
+		// 调试：价格未收到
+		log.Printf("🔍 [调试][%s] 价格未收到: side=%s, prices=%v", state.Slug, targetSide, state.LatestPrices)
 		return
 	}
 
-	// 计算公允价格
-	fairPrice := 0.5 + trendPercent*config.FairPriceTrendFactor
+	// 计算公允价格 (与 FKGoPolyTools 一致)
+	// UP 用正趋势，DOWN 用趋势取反 (使之为正)
+	// 趋势需要乘以 100 (0.0015 -> 0.15)
+	var trendFactor float64
+	if targetSide == "UP" {
+		trendFactor = (trendPercent * 100) * config.FairPriceTrendFactor
+	} else {
+		trendFactor = (-trendPercent * 100) * config.FairPriceTrendFactor // DOWN 取反
+	}
+	fairPrice := 0.5 + trendFactor
 	if fairPrice < 0.1 {
 		fairPrice = 0.1
 	}
-	if fairPrice > 0.9 {
-		fairPrice = 0.9
+	if fairPrice > 0.95 {
+		fairPrice = 0.95
 	}
 
 	// 检查价格优势
-	priceEdge := fairPrice - price
-	if priceEdge < config.MinPriceEdge {
-		return
-	}
+	// priceEdge := fairPrice - price
+	// if priceEdge < config.MinPriceEdge {
+	// 	// 调试：每个市场每60秒打印一次
+	// 	elapsedInt := int(elapsed.Seconds())
+	// 	if elapsedInt%60 < 2 { // 在每分钟的前2秒内打印
+	// 		log.Printf("🔍 [调试][%s][%s] 价格优势不足: edge=%.4f < %.4f (fair=%.3f, price=%.3f, trend=%.4f)",
+	// 			state.Slug, targetSide, priceEdge, config.MinPriceEdge, fairPrice, price, trendPercent)
+	// 	}
+	// 	return
+	// }
 
 	// 检查价格范围
 	if price < config.Leg0SharePrice0 {
@@ -493,24 +745,87 @@ func checkBinanceArbitrage(state *MarketState, config Type2Config) {
 		amount = config.ShareAmount3
 	}
 
-	// 执行 Leg1 买入 (模拟)
+	// 执行 Leg1 买入
 	cost := price * amount
-	log.Printf("📈 [%s][%s] Leg1 买入 %s: 价格=%.3f, 数量=%.0f, 成本=$%.2f, Binance趋势=%.4f, 公允价=%.3f",
-		state.ConfigGroup, state.Slug, targetSide, price, amount, cost, trendPercent, fairPrice)
+	filledPrice := price
+	filledAmount := amount
+	realOrderID := ""
 
-	// 记录到数据库
+	// ========== 真实交易模式 ==========
+	if config.TradingMode == "real" {
+		clobClientMu.Lock()
+		client := clobOrderClient
+		clobClientMu.Unlock()
+
+		if client == nil {
+			log.Printf("❌ [%s] 真实交易模式但 ClobOrderClient 未初始化", config.ID)
+			return
+		}
+
+		// 获取 TokenID
+		tokenID, ok := state.SideToTokenID[targetSide]
+		if !ok || tokenID == "" {
+			log.Printf("❌ [%s] 无法获取 %s 方向的 TokenID", config.ID, targetSide)
+			return
+		}
+
+		// 根据 OrderType 选择下单方式
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var orderResult *src.ClobOrderResult
+		var orderErr error
+
+		if config.OrderType == "limit" {
+			// 限价单 (GTC) - 做 maker，避免 taker 费用
+			log.Printf("💰 [%s] 执行限价单: %s %s @ %.4f x %.2f",
+				config.ID, targetSide, state.Slug, price, amount)
+			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, price, amount)
+		} else {
+			// 市价单 (FOK, 30秒过期)
+			log.Printf("💰 [%s] 执行市价单: %s %s @ %.4f x %.2f",
+				config.ID, targetSide, state.Slug, price, amount)
+			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, price, amount, 30)
+		}
+		cancel()
+
+		if orderErr != nil {
+			log.Printf("❌ [%s] 下单失败: %v", config.ID, orderErr)
+			return
+		}
+
+		if !orderResult.Success {
+			log.Printf("❌ [%s] 下单被拒绝: %s", config.ID, orderResult.ErrorMsg)
+			return
+		}
+
+		// 使用实际成交数据
+		realOrderID = orderResult.OrderID
+		if orderResult.FilledSize > 0 {
+			filledAmount = orderResult.FilledSize
+		}
+		if orderResult.FilledPrice > 0 {
+			filledPrice = orderResult.FilledPrice
+		}
+		cost = filledPrice * filledAmount
+
+		log.Printf("✅ [%s] 真实订单成交! OrderID: %s, 成交价: %.4f, 成交量: %.2f",
+			config.ID, realOrderID, filledPrice, filledAmount)
+	} else {
+		// 模拟模式日志
+		log.Printf("📈 [%s][%s] Leg1 买入 %s: 价格=%.3f, 数量=%.0f, 成本=$%.2f, Binance趋势=%.4f, 公允价=%.3f",
+			state.ConfigGroup, state.Slug, targetSide, price, amount, cost, trendPercent, fairPrice)
+	}
+
+	// 记录到数据库 (使用实际成交数据)
 	trade := &database.SimulationTrade{
-		StrategyType: "type2",
 		ConfigGroup:  state.ConfigGroup,
 		MarketSlug:   state.Slug,
-		Symbol:       state.Symbol,
 		Stage:        "Leg1",
 		Side:         targetSide,
-		Price:        price,
-		Amount:       amount,
+		Price:        filledPrice,
+		Amount:       filledAmount,
 		Cost:         cost,
-		BinancePrice: kline.Close,
 		TrendPercent: trendPercent,
+		FairPrice:    fairPrice,
 	}
 
 	id, err := database.InsertTrade(trade)
@@ -522,39 +837,55 @@ func checkBinanceArbitrage(state *MarketState, config Type2Config) {
 	// 更新状态
 	state.Leg1Filled = true
 	state.Leg1Side = targetSide
-	state.Leg1Price = price
-	state.Leg1Amount = amount
+	state.Leg1Price = filledPrice
+	state.Leg1Amount = filledAmount
 	state.Leg1RecordID = id
 	state.Leg1Time = now
 }
 
 // checkPendingResolutions 检查等待决议的交易
-func checkPendingResolutions(client *src.Client, pending map[string]*MarketState, config Type2Config) {
+func checkPendingResolutions(client *src.Client, pending map[string]*MarketState, config StrategyConfig) {
+	ctx := context.Background()
+
 	for slug, state := range pending {
 		if !state.Leg1Filled {
 			delete(pending, slug)
 			continue
 		}
 
-		// 查询市场决议
-		markets, err := client.SearchMarkets(slug, "", true)
-		if err != nil || len(markets) == 0 {
+		// 使用 GetMarketBySlug 查询市场 (与 FKGoPolyTools 一致)
+		market, err := client.GetMarketBySlug(ctx, slug, nil)
+		if err != nil {
 			continue
 		}
 
-		market := markets[0]
 		if !market.Closed {
 			continue // 市场尚未决议
 		}
 
-		// 获取决议结果
-		var resolution string
-		marketTokens := market.GetTokens()
-		for _, token := range marketTokens {
-			if token.Winner {
-				resolution = strings.ToUpper(token.Outcome)
+		// 通过 OutcomePrices 找到价格为 "1" 的索引 (获胜方向)
+		// Index 0 = UP, Index 1 = DOWN
+		prices := market.OutcomePrices
+		winIndex := -1
+		for i, pStr := range prices {
+			p, _ := parsePrice(pStr)
+			if p > 0.99 {
+				winIndex = i
 				break
 			}
+		}
+
+		if winIndex == -1 {
+			log.Printf("⚠️ [%s] %s: 已关闭但未找到胜者 (Prices: %v)", state.ConfigGroup, slug, prices)
+			continue
+		}
+
+		// 判定胜负 (Index 0=UP, Index 1=DOWN)
+		resolution := ""
+		if winIndex == 0 {
+			resolution = "UP"
+		} else if winIndex == 1 {
+			resolution = "DOWN"
 		}
 
 		if resolution == "" {
@@ -586,4 +917,160 @@ func checkPendingResolutions(client *src.Client, pending map[string]*MarketState
 // parsePrice 解析价格字符串
 func parsePrice(s string) (float64, error) {
 	return strconv.ParseFloat(s, 64)
+}
+
+// loadPendingFromDatabase 从数据库加载等待决议的交易
+func loadPendingFromDatabase(
+	client *src.Client,
+	allPendingResolutions map[string]map[string]*MarketState,
+	configs []StrategyConfig,
+) {
+	trades, err := database.GetUnresolvedTrades()
+	if err != nil {
+		log.Printf("⚠️ 加载未决议交易失败: %v", err)
+		return
+	}
+
+	if len(trades) == 0 {
+		log.Println("📋 启动检查: 没有未决议的交易")
+		return
+	}
+
+	log.Printf("📋 启动检查: 发现 %d 条未决议交易", len(trades))
+
+	// 按配置组整理
+	pendingByConfig := make(map[string][]*database.SimulationTrade)
+	for _, trade := range trades {
+		pendingByConfig[trade.ConfigGroup] = append(pendingByConfig[trade.ConfigGroup], trade)
+	}
+
+	// 检查每条记录的决议状态
+	ctx := context.Background()
+	for configGroup, configTrades := range pendingByConfig {
+		// 找到对应的配置
+		var config *StrategyConfig
+		for i := range configs {
+			if configs[i].ID == configGroup {
+				config = &configs[i]
+				break
+			}
+		}
+		if config == nil {
+			config = &configs[0] // 使用默认配置
+		}
+
+		for _, trade := range configTrades {
+			// 使用 GetMarketBySlug 查询市场 (与 FKGoPolyTools 一致)
+			market, err := client.GetMarketBySlug(ctx, trade.MarketSlug, nil)
+			if err != nil {
+				log.Printf("⏳ [%s] %s: 等待决议...", trade.ConfigGroup, trade.MarketSlug)
+
+				// 添加到 pending 列表以便后续检查
+				if _, ok := allPendingResolutions[trade.ConfigGroup]; !ok {
+					allPendingResolutions[trade.ConfigGroup] = make(map[string]*MarketState)
+				}
+				allPendingResolutions[trade.ConfigGroup][trade.MarketSlug] = &MarketState{
+					ConfigGroup:  trade.ConfigGroup,
+					Slug:         trade.MarketSlug,
+					Leg1Filled:   true,
+					Leg1Side:     trade.Side,
+					Leg1Price:    trade.Price,
+					Leg1Amount:   trade.Amount,
+					Leg1RecordID: trade.ID,
+				}
+				continue
+			}
+
+			if !market.Closed {
+				log.Printf("⏳ [%s] %s: 市场尚未关闭", trade.ConfigGroup, trade.MarketSlug)
+
+				// 添加到 pending 列表以便后续检查
+				if _, ok := allPendingResolutions[trade.ConfigGroup]; !ok {
+					allPendingResolutions[trade.ConfigGroup] = make(map[string]*MarketState)
+				}
+				allPendingResolutions[trade.ConfigGroup][trade.MarketSlug] = &MarketState{
+					ConfigGroup:  trade.ConfigGroup,
+					Slug:         trade.MarketSlug,
+					Leg1Filled:   true,
+					Leg1Side:     trade.Side,
+					Leg1Price:    trade.Price,
+					Leg1Amount:   trade.Amount,
+					Leg1RecordID: trade.ID,
+				}
+				continue
+			}
+
+			// 通过 OutcomePrices 找到价格为 "1" 的索引 (获胜方向)
+			// Index 0 = UP, Index 1 = DOWN
+			prices := market.OutcomePrices
+			winIndex := -1
+			for i, pStr := range prices {
+				p, _ := parsePrice(pStr)
+				if p > 0.99 {
+					winIndex = i
+					break
+				}
+			}
+
+			if winIndex == -1 {
+				log.Printf("⏳ [%s] %s: 已关闭但未找到胜者 (Prices: %v), 稍后重试", trade.ConfigGroup, trade.MarketSlug, prices)
+
+				// 添加到 pending 列表以便后续检查
+				if _, ok := allPendingResolutions[trade.ConfigGroup]; !ok {
+					allPendingResolutions[trade.ConfigGroup] = make(map[string]*MarketState)
+				}
+				allPendingResolutions[trade.ConfigGroup][trade.MarketSlug] = &MarketState{
+					ConfigGroup:  trade.ConfigGroup,
+					Slug:         trade.MarketSlug,
+					Leg1Filled:   true,
+					Leg1Side:     trade.Side,
+					Leg1Price:    trade.Price,
+					Leg1Amount:   trade.Amount,
+					Leg1RecordID: trade.ID,
+				}
+				continue
+			}
+
+			// 判定胜负 (Index 0=UP, Index 1=DOWN)
+			resolution := ""
+			if winIndex == 0 {
+				resolution = "UP"
+			} else if winIndex == 1 {
+				resolution = "DOWN"
+			}
+
+			if resolution == "" {
+				// 添加到 pending 列表以便后续检查
+				if _, ok := allPendingResolutions[trade.ConfigGroup]; !ok {
+					allPendingResolutions[trade.ConfigGroup] = make(map[string]*MarketState)
+				}
+				allPendingResolutions[trade.ConfigGroup][trade.MarketSlug] = &MarketState{
+					ConfigGroup:  trade.ConfigGroup,
+					Slug:         trade.MarketSlug,
+					Leg1Filled:   true,
+					Leg1Side:     trade.Side,
+					Leg1Price:    trade.Price,
+					Leg1Amount:   trade.Amount,
+					Leg1RecordID: trade.ID,
+				}
+				continue
+			}
+
+			// 计算 PnL
+			var pnl float64
+			if resolution == trade.Side {
+				pnl = trade.Amount - (trade.Price * trade.Amount)
+			} else {
+				pnl = -(trade.Price * trade.Amount)
+			}
+
+			log.Printf("✅ [启动恢复][%s] %s: 决议=%s, 持仓=%s, PnL=$%.2f",
+				trade.ConfigGroup, trade.MarketSlug, resolution, trade.Side, pnl)
+
+			// 更新数据库
+			if err := database.UpdateTradeResolution(trade.ID, resolution, pnl); err != nil {
+				log.Printf("❌ 更新决议失败: %v", err)
+			}
+		}
+	}
 }

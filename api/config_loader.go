@@ -8,8 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Type2Config 策略配置 (只保留 Leg1 相关配置)
-type Type2Config struct {
+// StrategyConfig 策略配置 (只保留 Leg1 相关配置)
+type StrategyConfig struct {
 	ID string // 配置组 ID
 
 	// Binance 趋势检测
@@ -28,6 +28,10 @@ type Type2Config struct {
 	ShareAmount1     float64 // 价格在 (0, A] 区间买入的数量
 	ShareAmount2     float64 // 价格在 (A, B] 区间买入的数量
 	ShareAmount3     float64 // 价格在 (B, C] 区间买入的数量
+
+	// 交易模式配置
+	TradingMode string // "simulation" (默认) 或 "real" (真实下单)
+	OrderType   string // "market" (市价FOK) 或 "limit" (限价GTC,做maker)
 
 	// 其他配置
 	FeeRate         float64 // 费率
@@ -59,12 +63,12 @@ type configFileYAML struct {
 }
 
 var (
-	globalConfigs     []Type2Config
+	globalConfigs     []StrategyConfig
 	globalConfigsOnce sync.Once
 )
 
-// GetOrLoadType2Configs 获取或加载配置
-func GetOrLoadType2Configs(baseConfig Type2Config) []Type2Config {
+// GetOrLoadConfigs 获取或加载配置
+func GetOrLoadConfigs(baseConfig StrategyConfig) []StrategyConfig {
 	globalConfigsOnce.Do(func() {
 		// 尝试从 YAML 文件加载
 		configFile := os.Getenv("CONFIG_FILE")
@@ -72,12 +76,12 @@ func GetOrLoadType2Configs(baseConfig Type2Config) []Type2Config {
 			configFile = "config.yaml"
 		}
 
-		if configs, err := LoadType2ConfigsFromYAML(configFile, baseConfig); err == nil && len(configs) > 0 {
+		if configs, err := LoadConfigsFromYAML(configFile, baseConfig); err == nil && len(configs) > 0 {
 			globalConfigs = configs
 			log.Printf("📝 从 %s 加载了 %d 个配置组", configFile, len(configs))
 		} else {
 			// 使用默认配置
-			globalConfigs = []Type2Config{baseConfig}
+			globalConfigs = []StrategyConfig{baseConfig}
 			if err != nil {
 				log.Printf("⚠️ 无法加载配置文件 %s: %v，使用默认配置", configFile, err)
 			}
@@ -87,8 +91,8 @@ func GetOrLoadType2Configs(baseConfig Type2Config) []Type2Config {
 	return globalConfigs
 }
 
-// LoadType2ConfigsFromYAML 从 YAML 文件加载配置
-func LoadType2ConfigsFromYAML(filename string, defaultConfig Type2Config) ([]Type2Config, error) {
+// LoadConfigsFromYAML 从 YAML 文件加载配置
+func LoadConfigsFromYAML(filename string, defaultConfig StrategyConfig) ([]StrategyConfig, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err
@@ -99,9 +103,20 @@ func LoadType2ConfigsFromYAML(filename string, defaultConfig Type2Config) ([]Typ
 		return nil, err
 	}
 
-	var configs []Type2Config
+	var configs []StrategyConfig
+
+	// 从环境变量读取交易模式
+	tradingMode := os.Getenv("TRADING_MODE")
+	if tradingMode == "" {
+		tradingMode = "simulation"
+	}
+	orderType := os.Getenv("ORDER_TYPE")
+	if orderType == "" {
+		orderType = "market" // 默认市价单
+	}
+
 	for _, g := range yamlConfig.Groups {
-		config := Type2Config{
+		config := StrategyConfig{
 			ID:                   g.ID,
 			MinTrendPercentUp:    valueOrDefault(g.MinTrendPercentUp, defaultConfig.MinTrendPercentUp),
 			MinTrendPercentDown:  valueOrDefault(g.MinTrendPercentDown, defaultConfig.MinTrendPercentDown),
@@ -118,6 +133,8 @@ func LoadType2ConfigsFromYAML(filename string, defaultConfig Type2Config) ([]Typ
 			ShareAmount3:         valueOrDefault(g.Leg1ShareAmount3, defaultConfig.ShareAmount3),
 			FeeRate:              valueOrDefault(g.FeeRate, defaultConfig.FeeRate),
 			ScanIntervalSec:      valueOrDefaultInt(g.ScanIntervalSec, defaultConfig.ScanIntervalSec),
+			TradingMode:          tradingMode,
+			OrderType:            orderType,
 		}
 		configs = append(configs, config)
 	}
