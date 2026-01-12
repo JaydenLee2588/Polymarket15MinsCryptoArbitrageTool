@@ -712,16 +712,10 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	}
 
 	// 检查价格优势
-	// priceEdge := fairPrice - price
-	// if priceEdge < config.MinPriceEdge {
-	// 	// 调试：每个市场每60秒打印一次
-	// 	elapsedInt := int(elapsed.Seconds())
-	// 	if elapsedInt%60 < 2 { // 在每分钟的前2秒内打印
-	// 		log.Printf("🔍 [调试][%s][%s] 价格优势不足: edge=%.4f < %.4f (fair=%.3f, price=%.3f, trend=%.4f)",
-	// 			state.Slug, targetSide, priceEdge, config.MinPriceEdge, fairPrice, price, trendPercent)
-	// 	}
-	// 	return
-	// }
+	priceEdge := fairPrice - price
+	if priceEdge < config.MinPriceEdge {
+		return
+	}
 
 	// 检查价格范围
 	if price < config.Leg0SharePrice0 {
