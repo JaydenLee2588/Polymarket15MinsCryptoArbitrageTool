@@ -1,0 +1,30 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment Variables
+.env
+
+# Data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
