@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket 15-Min Crypto Arbitrage Tool - API Test</title>
+    <style>
+        :root {
+            --bg-primary: #0f0f23;
+            --bg-secondary: #1a1a2e;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --accent-green: #00d26a;
+            --accent-red: #ff6b6b;
+            --accent-blue: #4dabf7;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+        }
+        
+        .api-section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .api-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .api-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        
+        .method-badge {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .method-get {
+            background: rgba(77, 171, 247, 0.2);
+            color: var(--accent-blue);
+        }
+        
+        .endpoint {
+            font-family: 'Fira Code', monospace;
+            background: rgba(255,255,255,0.05);
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            color: var(--accent-green);
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-right: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(77, 171, 247, 0.3);
+        }
+        
+        .response-container {
+            margin-top: 1rem;
+            max-height: 400px;
+            overflow: auto;
+        }
+        
+        .response-area {
+            background: #0a0a15;
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+        
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+        
+        .positive { color: var(--accent-green); }
+        .negative { color: var(--accent-red); }
+        
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Polymarket 15-Min Crypto Arbitrage Tool</h1>
+        <p class="subtitle">API 测试控制台 - 仅支持 Type2 策略 (Leg1 Only)</p>
+        
+        <!-- Simulation Stats API -->
+        <div class="api-section">
+            <div class="api-header">
+                <span class="api-title">📊 模拟交易统计</span>
+                <span class="method-badge method-get">GET</span>
+            </div>
+            <div class="endpoint">/api/v1/sim-stats</div>
+            <button class="btn btn-primary" onclick="fetchSimStats()">获取统计</button>
+            
+            <div id="stats-display" class="stats-grid" style="display: none;"></div>
+            <div class="response-container">
+                <div id="stats-response" class="response-area">点击上方按钮获取数据...</div>
+            </div>
+        </div>
+        
+        <!-- Copy Trading API -->
+        <div class="api-section">
+            <div class="api-header">
+                <span class="api-title">🤖 启动模拟跟单</span>
+                <span class="method-badge method-get">GET</span>
+            </div>
+            <div class="endpoint">/api/v1/sim-copy-trading?type=2</div>
+            <button class="btn btn-primary" onclick="startCopyTrading()">启动 Type2 模拟</button>
+            <div class="response-container">
+                <div id="trading-response" class="response-area">点击上方按钮启动模拟...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function fetchSimStats() {
+            const responseEl = document.getElementById('stats-response');
+            const statsDisplay = document.getElementById('stats-display');
+            responseEl.textContent = '加载中...';
+            
+            try {
+                const res = await fetch('/api/v1/sim-stats');
+                const data = await res.json();
+                responseEl.textContent = JSON.stringify(data, null, 2);
+                
+                if (data.success && data.summary) {
+                    const s = data.summary;
+                    const pnlClass = s.total_pnl >= 0 ? 'positive' : 'negative';
+                    statsDisplay.style.display = 'grid';
+                    statsDisplay.innerHTML = `
+                        <div class="stat-card">
+                            <div class="stat-value">${s.trade_count}</div>
+                            <div class="stat-label">交易次数</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value ${pnlClass}">$${s.total_pnl.toFixed(2)}</div>
+                            <div class="stat-label">总 PnL</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${s.win_count}</div>
+                            <div class="stat-label">胜利次数</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${(s.win_rate * 100).toFixed(1)}%</div>
+                            <div class="stat-label">胜率</div>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                responseEl.textContent = '错误: ' + err.message;
+            }
+        }
+        
+        async function startCopyTrading() {
+            const responseEl = document.getElementById('trading-response');
+            responseEl.textContent = '启动中...';
+            
+            try {
+                const res = await fetch('/api/v1/sim-copy-trading?type=2');
+                const data = await res.json();
+                responseEl.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                responseEl.textContent = '错误: ' + err.message;
+            }
+        }
+    </script>
+</body>
+</html>
