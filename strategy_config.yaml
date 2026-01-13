@@ -1,5 +1,5 @@
 groups:
-  - id: "F1.85"
+  - id: "F1.85_450"
     # Binance 趋势检测
     min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
@@ -18,23 +18,7 @@ groups:
     # 其他配置
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F1.65"
-    leg0_share_price_0: 0.54
-    leg1_share_price_1: 0.62
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 40
-    leg1_share_amount_2: 33
-    leg1_share_amount_3: 28
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    min_price_edge: 0.08
-    fair_price_trend_factor: 1.65   # 测试 1.65
-    trend_window_sec_start: 118
-    trend_window_sec_end: 450
-    fee_rate: 0.003                  # 费率 0.3%
-
-  - id: "F1.95"
+  - id: "F1.90_450"
     leg0_share_price_0: 0.54
     leg1_share_price_1: 0.62
     leg1_share_price_2: 0.78
@@ -50,7 +34,7 @@ groups:
     trend_window_sec_end: 450
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F2.05"
+  - id: "F1.80_450"
     leg0_share_price_0: 0.54
     leg1_share_price_1: 0.62
     leg1_share_price_2: 0.78
@@ -66,14 +50,14 @@ groups:
     trend_window_sec_end: 450
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F1.85_90_450"
+  - id: "F1.85_400"
     # Binance 趋势检测
     min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
     min_price_edge: 0.08             # 最小价格优势
     fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
-    trend_window_sec_start: 90       # 开盘后多少秒开始检测 (接近2分钟)
-    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (7.5分钟)
+    trend_window_sec_start: 118      # 开盘后多少秒开始检测 (接近2分钟)
+    trend_window_sec_end: 400        # 开盘后多少秒停止检测 (7.5分钟)
     # 动态 Share 配置 (基于入场价格)
     leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
     leg1_share_price_1: 0.66         # 第一价格阈值
@@ -85,14 +69,14 @@ groups:
     # 其他配置
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F1.85_150_450"
+  - id: "F1.85_500"
     # Binance 趋势检测
     min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
     min_price_edge: 0.08             # 最小价格优势
     fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
-    trend_window_sec_start: 150      # 开盘后多少秒开始检测 (接近2分钟)
-    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (7.5分钟)
+    trend_window_sec_start: 118      # 开盘后多少秒开始检测 (接近2分钟)
+    trend_window_sec_end: 500        # 开盘后多少秒停止检测 (7.5分钟)
     # 动态 Share 配置 (基于入场价格)
     leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
     leg1_share_price_1: 0.66         # 第一价格阈值
@@ -104,14 +88,14 @@ groups:
     # 其他配置
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F1.85_150_300"
+  - id: "F1.85_550"
     # Binance 趋势检测
     min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
     min_price_edge: 0.08             # 最小价格优势
     fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
-    trend_window_sec_start: 150      # 开盘后多少秒开始检测 (接近2分钟)
-    trend_window_sec_end: 300        # 开盘后多少秒停止检测 (7.5分钟)
+    trend_window_sec_start: 118      # 开盘后多少秒开始检测 (接近2分钟)
+    trend_window_sec_end: 550        # 开盘后多少秒停止检测 (7.5分钟)
     # 动态 Share 配置 (基于入场价格)
     leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
     leg1_share_price_1: 0.66         # 第一价格阈值
@@ -123,14 +107,33 @@ groups:
     # 其他配置
     fee_rate: 0.003                  # 费率 0.3%
 
-  - id: "F1.85_150_600"
+  - id: "F1.85_600"
     # Binance 趋势检测
     min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
     min_price_edge: 0.08             # 最小价格优势
     fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
-    trend_window_sec_start: 150      # 开盘后多少秒开始检测 (接近2分钟)
+    trend_window_sec_start: 118      # 开盘后多少秒开始检测 (接近2分钟)
     trend_window_sec_end: 600        # 开盘后多少秒停止检测 (7.5分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 其他配置
+    fee_rate: 0.003                  # 费率 0.3%
+
+  - id: "F1.85_650"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118      # 开盘后多少秒开始检测 (接近2分钟)
+    trend_window_sec_end: 650        # 开盘后多少秒停止检测 (7.5分钟)
     # 动态 Share 配置 (基于入场价格)
     leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
     leg1_share_price_1: 0.66         # 第一价格阈值
