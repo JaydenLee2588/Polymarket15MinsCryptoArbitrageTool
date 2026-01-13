@@ -112,7 +112,7 @@ func LoadConfigsFromYAML(filename string, defaultConfig StrategyConfig) ([]Strat
 	}
 	orderType := os.Getenv("ORDER_TYPE")
 	if orderType == "" {
-		orderType = "market" // 默认市价单
+		orderType = "GTC" // 默认限价单
 	}
 
 	for _, g := range yamlConfig.Groups {

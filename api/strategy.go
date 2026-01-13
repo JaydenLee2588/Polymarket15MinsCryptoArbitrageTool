@@ -763,20 +763,33 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
+		// ==== 深度检查 (FOK/FAK) ====
+		if config.OrderType == "FOK" || config.OrderType == "FAK" {
+			depthCtx, dc := context.WithTimeout(context.Background(), 5*time.Second)
+			depth, err := client.GetOrderbookDepth(depthCtx, tokenID, price, "BUY")
+			dc()
+
+			if err == nil {
+				if depth.AvailableSize < amount {
+					log.Printf("⚠️ 深度不足，调整: %.2f → %.2f", amount, depth.AvailableSize)
+					amount = depth.AvailableSize
+				}
+			}
+		}
+
 		// 根据 OrderType 选择下单方式
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var orderResult *src.ClobOrderResult
 		var orderErr error
 
-		if config.OrderType == "limit" {
+		if config.OrderType == "GTC" {
 			// 限价单 (GTC) - 做 maker，避免 taker 费用
-			log.Printf("💰 [%s] 执行限价单: %s %s @ %.4f x %.2f",
-				config.ID, targetSide, state.Slug, price, amount)
 			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, price, amount)
+		} else if config.OrderType == "FAK" {
+			// 市价单 FAK - 允许部分成交
+			orderResult, orderErr = client.PlaceMarketBuyOrderFAK(ctx, tokenID, price, amount, 30)
 		} else {
-			// 市价单 (FOK, 30秒过期)
-			log.Printf("💰 [%s] 执行市价单: %s %s @ %.4f x %.2f",
-				config.ID, targetSide, state.Slug, price, amount)
+			// 市价单 FOK - 必须全部成交（默认）
 			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, price, amount, 30)
 		}
 		cancel()
@@ -791,23 +804,71 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
-		// 使用实际成交数据
+		// 获取订单ID
 		realOrderID = orderResult.OrderID
-		if orderResult.FilledSize > 0 {
-			filledAmount = orderResult.FilledSize
-		}
-		if orderResult.FilledPrice > 0 {
-			filledPrice = orderResult.FilledPrice
-		}
-		cost = filledPrice * filledAmount
 
-		log.Printf("✅ [%s] 真实订单成交! OrderID: %s, 成交价: %.4f, 成交量: %.2f",
-			config.ID, realOrderID, filledPrice, filledAmount)
-	} else {
-		// 模拟模式日志
-		log.Printf("📈 [%s][%s] Leg1 买入 %s: 价格=%.3f, 数量=%.0f, 成本=$%.2f, Binance趋势=%.4f, 公允价=%.3f",
-			state.ConfigGroup, state.Slug, targetSide, price, amount, cost, trendPercent, fairPrice)
+		// ========== 验证订单成交情况 ==========
+		// 使用 VerifyOrderCompletion 获取实际成交数据
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer verifyCancel()
+
+		verifyResult := client.VerifyOrderCompletion(verifyCtx, realOrderID, 3, 3*time.Second)
+
+		if verifyResult.Success {
+			// 订单成功成交（完全或部分）
+			status := verifyResult.Status
+			log.Printf("✅ [%s] 订单成交验证成功（第%d次查询）", config.ID, verifyResult.Attempts)
+
+			// 解析实际成交量和价格
+			if fs, err := strconv.ParseFloat(status.SizeMatched, 64); err == nil {
+				filledAmount = fs
+			}
+			if fp, err := strconv.ParseFloat(status.Price, 64); err == nil {
+				filledPrice = fp
+			}
+			cost = filledPrice * filledAmount
+
+			// 检查是否部分成交
+			if config.OrderType == "FAK" && filledAmount < amount {
+				log.Printf("⚠️ [%s] 部分成交: %.2f/%.2f (%.1f%%)",
+					config.ID, filledAmount, amount, (filledAmount/amount)*100)
+			}
+		} else {
+			// 订单验证失败
+			log.Printf("❌ [%s] 订单验证失败: %s", config.ID, verifyResult.ErrorMessage)
+			return
+		}
 	}
+
+	// ========== 统一交易日志 (真实 + 模拟) ==========
+	modeTag := "模拟"
+	orderInfo := ""
+	partialFillTag := ""
+
+	if config.TradingMode == "real" {
+		modeTag = "💰真实"
+		if realOrderID != "" {
+			orderInfo = fmt.Sprintf(", OrderID=%s", realOrderID)
+		}
+		// 部分成交标识
+		if config.OrderType == "FAK" && filledAmount < amount {
+			partialFillTag = fmt.Sprintf(" (部分成交:%.0f/%.0f)", filledAmount, amount)
+		}
+	}
+
+	log.Printf("✅ [%s][%s] Leg1买入成功%s | 时间=%s | 市场=%s | 方向=%s | 价格=%.4f | 数量=%.2f | 成本=$%.2f | 趋势=%.4f%% | 公允价=%.4f%s",
+		modeTag,
+		state.ConfigGroup,
+		partialFillTag,
+		now.Format("15:04:05"),
+		state.Slug,
+		targetSide,
+		filledPrice,
+		filledAmount,
+		cost,
+		trendPercent*100,
+		fairPrice,
+		orderInfo)
 
 	// 记录到数据库 (使用实际成交数据)
 	trade := &database.SimulationTrade{

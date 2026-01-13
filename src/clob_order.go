@@ -372,6 +372,16 @@ func (c *ClobOrderClient) PlaceMarketSellOrder(ctx context.Context, tokenID stri
 	return c.PlaceOrder(ctx, tokenID, ClobOrderSideSell, price, size, OrderTypeFOK, expirationSec)
 }
 
+// PlaceMarketBuyOrderFAK 下市价买单 (FAK - Fill-And-Kill，允许部分成交)
+func (c *ClobOrderClient) PlaceMarketBuyOrderFAK(ctx context.Context, tokenID string, price float64, size float64, expirationSec int64) (*ClobOrderResult, error) {
+	return c.PlaceOrder(ctx, tokenID, ClobOrderSideBuy, price, size, OrderTypeFAK, expirationSec)
+}
+
+// PlaceMarketSellOrderFAK 下市价卖单 (FAK - Fill-And-Kill，允许部分成交)
+func (c *ClobOrderClient) PlaceMarketSellOrderFAK(ctx context.Context, tokenID string, price float64, size float64, expirationSec int64) (*ClobOrderResult, error) {
+	return c.PlaceOrder(ctx, tokenID, ClobOrderSideSell, price, size, OrderTypeFAK, expirationSec)
+}
+
 // PlaceLimitBuyOrder 下限价买单 (GTC)
 func (c *ClobOrderClient) PlaceLimitBuyOrder(ctx context.Context, tokenID string, price float64, size float64) (*ClobOrderResult, error) {
 	return c.PlaceOrder(ctx, tokenID, ClobOrderSideBuy, price, size, OrderTypeGTC, 0)
@@ -381,4 +391,3 @@ func (c *ClobOrderClient) PlaceLimitBuyOrder(ctx context.Context, tokenID string
 func (c *ClobOrderClient) PlaceLimitSellOrder(ctx context.Context, tokenID string, price float64, size float64) (*ClobOrderResult, error) {
 	return c.PlaceOrder(ctx, tokenID, ClobOrderSideSell, price, size, OrderTypeGTC, 0)
 }
-
