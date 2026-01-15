@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -61,11 +64,12 @@ type PostOrderRequest struct {
 	Order     *SignedOrderPayload `json:"order"`
 	Owner     string              `json:"owner"`
 	OrderType string              `json:"orderType"`
+	PostOnly  *bool               `json:"postOnly,omitempty"` // 可选字段，GTC订单专用
 }
 
 // SignedOrderPayload 签名订单的 JSON 表示
 type SignedOrderPayload struct {
-	Salt          string `json:"salt"`
+	Salt          int64  `json:"salt"` // 必须是整数，不是字符串
 	Maker         string `json:"maker"`
 	Signer        string `json:"signer"`
 	Taker         string `json:"taker"`
@@ -75,9 +79,17 @@ type SignedOrderPayload struct {
 	Expiration    string `json:"expiration"`
 	Nonce         string `json:"nonce"`
 	FeeRateBps    string `json:"feeRateBps"`
-	Side          string `json:"side"`
+	Side          string `json:"side"` // 必须是 "BUY" 或 "SELL"
 	SignatureType int    `json:"signatureType"`
 	Signature     string `json:"signature"`
+}
+
+// sideToString 将数字 side (0=BUY, 1=SELL) 转换为 API 字符串格式
+func sideToString(side int64) string {
+	if side == 0 {
+		return "BUY"
+	}
+	return "SELL"
 }
 
 // ClobOrderResponse 下单响应
@@ -105,7 +117,7 @@ const (
 	// CTF Exchange
 	CTFExchangeAddress = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
 	// Operator address (taker address for public orders)
-	OperatorAddress = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
+	OperatorAddress = "0x0000000000000000000000000000000000000000"
 )
 
 // NewClobOrderClient 创建新的订单客户端
@@ -170,6 +182,16 @@ func (c *ClobOrderClient) PlaceOrder(
 	orderType OrderType,
 	expirationSec int64,
 ) (*ClobOrderResult, error) {
+	// ✅ 验证订单类型
+	validOrderTypes := map[OrderType]bool{
+		OrderTypeFOK: true,
+		OrderTypeGTC: true,
+		OrderTypeFAK: true,
+		OrderTypeGTD: true,
+	}
+	if !validOrderTypes[orderType] {
+		return nil, fmt.Errorf("无效的订单类型: %s (必须是 FOK, GTC, FAK, GTD 之一)", orderType)
+	}
 	if c.credentials == nil {
 		return nil, fmt.Errorf("未设置 API 凭证，请先调用 SetCredentials")
 	}
@@ -177,6 +199,18 @@ func (c *ClobOrderClient) PlaceOrder(
 	// 验证价格范围
 	if price <= 0 || price >= 1 {
 		return nil, fmt.Errorf("价格必须在 0 和 1 之间: %.4f", price)
+	}
+
+	// ✅ 确保订单金额 >= $1 (Polymarket API 最低要求)
+	minOrderValue := 1.0
+	orderValue := price * size
+	if orderValue < minOrderValue {
+		// 自动增加 share 数量以满足最低订单金额
+		adjustedSize := minOrderValue / price
+		// 向上取整到整数 share
+		adjustedSize = float64(int(adjustedSize) + 1)
+		fmt.Printf("📊 [订单调整] 原金额 $%.2f < $1, 自动调整: %.0f shares → %.0f shares\n", orderValue, size, adjustedSize)
+		size = adjustedSize
 	}
 
 	// 计算 makerAmount 和 takerAmount
@@ -203,8 +237,10 @@ func (c *ClobOrderClient) PlaceOrder(
 	}
 
 	// 计算过期时间
+	// 注意: 只有 GTD (Good-Til-Date) 订单可以设置过期时间
+	// 对于 FOK, GTC, FAK 订单，expiration 必须为 "0"
 	var expiration string
-	if expirationSec > 0 {
+	if orderType == OrderTypeGTD && expirationSec > 0 {
 		expirationTime := time.Now().Unix() + expirationSec
 		expiration = strconv.FormatInt(expirationTime, 10)
 	} else {
@@ -221,16 +257,16 @@ func (c *ClobOrderClient) PlaceOrder(
 		TokenId:       tokenID,
 		MakerAmount:   makerAmount.String(),
 		TakerAmount:   takerAmount.String(),
-		FeeRateBps:    "0", // 费率由 Polymarket 设置
+		FeeRateBps:    "1000", // 15分钟市场要求的费率 (10%)
 		Nonce:         nonce,
 		Signer:        c.address.Hex(),
 		Expiration:    expiration,
 		Side:          OrderBuilderSide(side),
-		SignatureType: EOA,
+		SignatureType: EOA, // 从 Polymarket 导出的私钥是 EOA 类型
 	}
 
-	// 确定使用哪个合约 (这里使用 NegRisk CTF Exchange)
-	verifyingContract := NegRiskCTFExchange
+	// 确定使用哪个合约 (测试: 使用普通 CTF Exchange)
+	verifyingContract := CTFExchange
 
 	// 构建并签名订单 (使用本地的 ExchangeOrderBuilder)
 	signedOrder, err := c.orderBuilder.BuildSignedOrder(c.privateKey, orderData, verifyingContract)
@@ -240,7 +276,7 @@ func (c *ClobOrderClient) PlaceOrder(
 
 	// 转换为 API 请求格式
 	orderPayload := &SignedOrderPayload{
-		Salt:          signedOrder.Salt.String(),
+		Salt:          signedOrder.Salt.Int64(), // 必须是整数
 		Maker:         signedOrder.Maker.Hex(),
 		Signer:        signedOrder.Signer.Hex(),
 		Taker:         signedOrder.Taker.Hex(),
@@ -250,16 +286,18 @@ func (c *ClobOrderClient) PlaceOrder(
 		Expiration:    signedOrder.Expiration.String(),
 		Nonce:         signedOrder.Nonce.String(),
 		FeeRateBps:    signedOrder.FeeRateBps.String(),
-		Side:          strconv.FormatInt(signedOrder.Side.Int64(), 10),
+		Side:          sideToString(signedOrder.Side.Int64()), // 必须是 "BUY" 或 "SELL"
 		SignatureType: int(signedOrder.SignatureType.Int64()),
 		Signature:     "0x" + hex.EncodeToString(signedOrder.Signature),
 	}
 
 	// 构建请求
+	// 注意: orderType 必须是大写 (FOK, GTC, FAK, GTD)
 	postOrderReq := &PostOrderRequest{
 		Order:     orderPayload,
-		Owner:     c.credentials.APIKey,
-		OrderType: string(orderType),
+		Owner:     c.credentials.APIKey, // Polymarket 要求 owner 是 API Key
+		OrderType: string(orderType),    // OrderType 已经是大写常量
+		PostOnly:  nil,                  // GTC 订单可以设置为 true 以做 maker
 	}
 
 	// 发送请求
@@ -273,18 +311,20 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
+	// 🔍 DEBUG: 打印完整的请求payload
+	fmt.Printf("📤 [DEBUG] Order Payload:\n%s\n", string(jsonData))
+
 	// 创建 HTTP 请求
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", ClobHost+"/order", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	// 添加 L2 认证头
+	// 添加 L2 认证头 (使用 HMAC-SHA256 签名)
 	timestamp := time.Now().Unix()
-	nonce := 0
 
-	// 签名请求
-	signature, err := c.signL2Request("POST", "/order", string(jsonData), timestamp)
+	// 使用 HMAC-SHA256 签名请求
+	signature, err := c.signL2HMAC("POST", "/order", string(jsonData), timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("签名请求失败: %w", err)
 	}
@@ -293,7 +333,6 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	httpReq.Header.Set("POLY_ADDRESS", c.address.Hex())
 	httpReq.Header.Set("POLY_SIGNATURE", signature)
 	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
-	httpReq.Header.Set("POLY_NONCE", strconv.Itoa(nonce))
 	httpReq.Header.Set("POLY_API_KEY", c.credentials.APIKey)
 	httpReq.Header.Set("POLY_PASSPHRASE", c.credentials.Passphrase)
 
@@ -308,6 +347,9 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
+
+	// 🔍 DEBUG: 打印完整的响应
+	fmt.Printf("📥 [DEBUG] Response Status: %d\n📥 [DEBUG] Response Body: %s\n", resp.StatusCode, string(body))
 
 	// 解析响应
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -343,7 +385,42 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	return result, nil
 }
 
-// signL2Request 签名 L2 请求
+// signL2HMAC 使用 HMAC-SHA256 签名 L2 请求 (Polymarket 官方格式)
+// 消息格式: timestamp + method + path + body
+// 使用 API Secret (Base64 解码后) 作为密钥
+func (c *ClobOrderClient) signL2HMAC(method, path, body string, timestamp int64) (string, error) {
+	if c.credentials == nil || c.credentials.APISecret == "" {
+		return "", fmt.Errorf("未设置 API Secret")
+	}
+
+	// 解码 Base64 格式的 API Secret (支持标准和 URL-safe Base64)
+	secret := c.credentials.APISecret
+	// 先将 URL-safe 转换为标准 Base64
+	secret = strings.ReplaceAll(secret, "-", "+")
+	secret = strings.ReplaceAll(secret, "_", "/")
+
+	secretBytes, err := base64.StdEncoding.DecodeString(secret)
+	if err != nil {
+		return "", fmt.Errorf("解码 API Secret 失败: %w", err)
+	}
+
+	// 构建待签名消息: timestamp + method + path + body
+	message := strconv.FormatInt(timestamp, 10) + method + path + body
+
+	// 计算 HMAC-SHA256
+	h := hmac.New(sha256.New, secretBytes)
+	h.Write([]byte(message))
+	signatureBytes := h.Sum(nil)
+
+	// 返回 Base64 编码，然后转换为 URL-safe 格式
+	sig := base64.StdEncoding.EncodeToString(signatureBytes)
+	sig = strings.ReplaceAll(sig, "+", "-")
+	sig = strings.ReplaceAll(sig, "/", "_")
+
+	return sig, nil
+}
+
+// signL2Request 保留旧方法用于兼容性 (使用私钥签名，用于某些特殊端点)
 func (c *ClobOrderClient) signL2Request(method, path, body string, timestamp int64) (string, error) {
 	// L2 签名格式: method + timestamp + path + body
 	message := method + strconv.FormatInt(timestamp, 10) + path + body

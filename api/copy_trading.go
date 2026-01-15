@@ -61,7 +61,6 @@ func CopyTradingHandler(w http.ResponseWriter, r *http.Request) {
 		ShareAmount1:         getEnvFloat("TYPE2_SHARE_AMOUNT_1", 50),
 		ShareAmount2:         getEnvFloat("TYPE2_SHARE_AMOUNT_2", 30),
 		ShareAmount3:         getEnvFloat("TYPE2_SHARE_AMOUNT_3", 10),
-		FeeRate:              getEnvFloat("TYPE2_FEE_RATE", 0.005),
 		ScanIntervalSec:      getEnvInt("SCAN_INTERVAL", 5),
 	}
 

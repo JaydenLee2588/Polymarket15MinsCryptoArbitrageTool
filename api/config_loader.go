@@ -34,8 +34,11 @@ type StrategyConfig struct {
 	OrderType   string // "market" (市价FOK) 或 "limit" (限价GTC,做maker)
 
 	// 其他配置
-	FeeRate         float64 // 费率
-	ScanIntervalSec int     // 扫描间隔 (秒)
+	ScanIntervalSec int // 扫描间隔 (秒)
+
+	// 滑点配置
+	MaxSlippage   float64 // 最大滑点 (例如 0.02 表示 2 美分)
+	PriceTickSize float64 // 最小价格单位 (通常是 0.01)
 }
 
 // configGroupYAML YAML 文件中的配置组结构
@@ -54,8 +57,9 @@ type configGroupYAML struct {
 	Leg1ShareAmount1     float64 `yaml:"leg1_share_amount_1"`
 	Leg1ShareAmount2     float64 `yaml:"leg1_share_amount_2"`
 	Leg1ShareAmount3     float64 `yaml:"leg1_share_amount_3"`
-	FeeRate              float64 `yaml:"fee_rate"`
 	ScanIntervalSec      int     `yaml:"scan_interval_sec"`
+	MaxSlippage          float64 `yaml:"max_slippage"`
+	PriceTickSize        float64 `yaml:"price_tick_size"`
 }
 
 type configFileYAML struct {
@@ -131,8 +135,9 @@ func LoadConfigsFromYAML(filename string, defaultConfig StrategyConfig) ([]Strat
 			ShareAmount1:         valueOrDefault(g.Leg1ShareAmount1, defaultConfig.ShareAmount1),
 			ShareAmount2:         valueOrDefault(g.Leg1ShareAmount2, defaultConfig.ShareAmount2),
 			ShareAmount3:         valueOrDefault(g.Leg1ShareAmount3, defaultConfig.ShareAmount3),
-			FeeRate:              valueOrDefault(g.FeeRate, defaultConfig.FeeRate),
 			ScanIntervalSec:      valueOrDefaultInt(g.ScanIntervalSec, defaultConfig.ScanIntervalSec),
+			MaxSlippage:          valueOrDefault(g.MaxSlippage, 0.02),   // 默认 2 美分
+			PriceTickSize:        valueOrDefault(g.PriceTickSize, 0.01), // 默认 1 美分
 			TradingMode:          tradingMode,
 			OrderType:            orderType,
 		}

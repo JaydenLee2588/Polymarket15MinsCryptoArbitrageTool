@@ -258,4 +258,3 @@ func (creds *ClobAPICredentials) ToClobAuth() *ClobAuth {
 		Passphrase: creds.Passphrase,
 	}
 }
-

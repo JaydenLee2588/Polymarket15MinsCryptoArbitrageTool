@@ -659,6 +659,7 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	now := time.Now()
 	elapsed := now.Sub(state.StartTime)
 	if elapsed.Seconds() < float64(config.TrendWindowSecStart) || elapsed.Seconds() > float64(config.TrendWindowSecEnd) {
+		// 只有在满足趋势但在时间窗口外时记录一次 (避免日志爆炸)
 		return
 	}
 
@@ -689,14 +690,10 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	// 获取 Polymarket 价格
 	price, ok := state.LatestPrices[targetSide]
 	if !ok || price <= 0 {
-		// 调试：价格未收到
-		log.Printf("🔍 [调试][%s] 价格未收到: side=%s, prices=%v", state.Slug, targetSide, state.LatestPrices)
 		return
 	}
 
 	// 计算公允价格 (与 FKGoPolyTools 一致)
-	// UP 用正趋势，DOWN 用趋势取反 (使之为正)
-	// 趋势需要乘以 100 (0.0015 -> 0.15)
 	var trendFactor float64
 	if targetSide == "UP" {
 		trendFactor = (trendPercent * 100) * config.FairPriceTrendFactor
@@ -713,13 +710,21 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 
 	// 检查价格优势
 	priceEdge := fairPrice - price
+
+	// 记录决策过程 (用于调试为什么没交易)
 	if priceEdge < config.MinPriceEdge {
+		// 如果有趋势但优势不足，每分钟记录一次
+		if time.Since(state.StartTime).Seconds() > 120 && int(time.Now().Unix())%30 == 0 {
+			log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: 公允价=%.3f, 现价=%.3f, 优势=%.3f (要求=%.2f)",
+				state.ConfigGroup, state.Slug, targetSide, trendPercent*100, fairPrice, price, priceEdge, config.MinPriceEdge)
+		}
 		return
 	}
 
 	// 检查价格范围
 	if price < config.Leg0SharePrice0 {
-		return // 价格太低，可能有问题
+		log.Printf("⚠️ [%s][%s] 价格 %.3f 低于阈值 %.2f，跳过", state.ConfigGroup, state.Slug, price, config.Leg0SharePrice0)
+		return
 	}
 	if price > config.SharePriceLevel3 {
 		if !state.Leg1SkippedHighPrice {
@@ -763,34 +768,74 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
-		// ==== 深度检查 (FOK/FAK) ====
+		// ==== 渐进式深度检查 (FOK/FAK) ====
+		finalPrice := price // 最终下单价格
 		if config.OrderType == "FOK" || config.OrderType == "FAK" {
-			depthCtx, dc := context.WithTimeout(context.Background(), 5*time.Second)
-			depth, err := client.GetOrderbookDepth(depthCtx, tokenID, price, "BUY")
-			dc()
+			maxPrice := price + config.MaxSlippage
+			tickSize := config.PriceTickSize
+			if tickSize <= 0 {
+				tickSize = 0.01 // 默认 1 美分
+			}
 
-			if err == nil {
-				if depth.AvailableSize < amount {
-					log.Printf("⚠️ 深度不足，调整: %.2f → %.2f", amount, depth.AvailableSize)
-					amount = depth.AvailableSize
+			foundDepth := false
+			checkPrice := price
+
+			for checkPrice <= maxPrice {
+				depthCtx, dc := context.WithTimeout(context.Background(), 3*time.Second)
+				depth, err := client.GetOrderbookDepth(depthCtx, tokenID, checkPrice, "BUY")
+				dc()
+
+				if err == nil && depth.AvailableSize >= amount {
+					// 找到足够深度
+					finalPrice = checkPrice
+					foundDepth = true
+					if checkPrice > price {
+						log.Printf("📈 [%s] 滑点调整: %.3f → %.3f (深度=%.2f)", config.ID, price, checkPrice, depth.AvailableSize)
+					}
+					break
 				}
+
+				// 增加价格继续检查
+				checkPrice += tickSize
+			}
+
+			if !foundDepth {
+				// 在滑点范围内仍然没有足够深度，尝试最大滑点价格
+				depthCtx, dc := context.WithTimeout(context.Background(), 3*time.Second)
+				depth, err := client.GetOrderbookDepth(depthCtx, tokenID, maxPrice, "BUY")
+				dc()
+
+				if err == nil && depth.AvailableSize > 0 {
+					// 有部分深度可用
+					log.Printf("⚠️ [%s] 深度不足，使用最大滑点 (%.3f) 部分成交: %.2f → %.2f", config.ID, maxPrice, amount, depth.AvailableSize)
+					finalPrice = maxPrice
+					amount = depth.AvailableSize
+				} else {
+					log.Printf("⚠️ [%s] 滑点范围 (%.3f~%.3f) 内无可用深度，跳过下单", config.ID, price, maxPrice)
+					return
+				}
+			}
+
+			if amount <= 0.000001 {
+				log.Printf("⚠️ [%s] 可用数量不足 (%.6f)，跳过下单", config.ID, amount)
+				return
 			}
 		}
 
-		// 根据 OrderType 选择下单方式
+		// 根据 OrderType 选择下单方式 (使用 finalPrice)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var orderResult *src.ClobOrderResult
 		var orderErr error
 
 		if config.OrderType == "GTC" {
 			// 限价单 (GTC) - 做 maker，避免 taker 费用
-			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, price, amount)
+			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, finalPrice, amount)
 		} else if config.OrderType == "FAK" {
 			// 市价单 FAK - 允许部分成交
-			orderResult, orderErr = client.PlaceMarketBuyOrderFAK(ctx, tokenID, price, amount, 30)
+			orderResult, orderErr = client.PlaceMarketBuyOrderFAK(ctx, tokenID, finalPrice, amount, 30)
 		} else {
 			// 市价单 FOK - 必须全部成交（默认）
-			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, price, amount, 30)
+			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, finalPrice, amount, 30)
 		}
 		cancel()
 

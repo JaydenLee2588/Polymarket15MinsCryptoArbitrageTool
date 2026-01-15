@@ -436,4 +436,3 @@ func (e *ExchangeOrderBuilder) BuildOrderHash(order *Order, contract VerifyingCo
 func (e *ExchangeOrderBuilder) BuildOrderSignature(privateKey *ecdsa.PrivateKey, orderHash OrderHash) (OrderSignature, error) {
 	return signOrderHash(privateKey, orderHash)
 }
-
