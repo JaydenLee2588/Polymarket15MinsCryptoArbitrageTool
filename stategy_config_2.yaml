@@ -1,0 +1,160 @@
+groups:
+  - id: "F1.95_118_450"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.85_118_450"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.85    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F2.05_118_450"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 2.05    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.95_118_380"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 380        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.95_118_310"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 310        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.95_118_520"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 520        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.95_78_450"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 78       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)
+
+  - id: "F1.95_158_450"
+    # Binance 趋势检测
+    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.13%)
+    min_price_edge: 0.08             # 最小价格优势
+    fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
+    trend_window_sec_start: 158       # 开盘后多少秒开始检测 (接近1分钟半)
+    trend_window_sec_end: 450        # 开盘后多少秒停止检测 (6分钟)
+    # 动态 Share 配置 (基于入场价格)
+    leg0_share_price_0: 0.54         # 最低价格阈值 (低于此不买)
+    leg1_share_price_1: 0.66         # 第一价格阈值
+    leg1_share_price_2: 0.78         # 第二价格阈值  
+    leg1_share_price_3: 0.90         # 第三价格阈值 (高于此不买)
+    leg1_share_amount_1: 40          # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 33          # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 28          # 价格在 (0.78, 0.90] 买入数量
+    # 滑点配置 (用于 FAK/FOK 订单类型)
+    max_slippage: 0.04               # 最大滑点 (4 美分)
+    price_tick_size: 0.01            # 最小价格单位 (1 美分)

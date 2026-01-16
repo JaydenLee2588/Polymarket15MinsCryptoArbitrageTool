@@ -1,6 +1,8 @@
 ﻿package src
 
 import (
+	"Polymarket15MinsCryptoArbitrageTool/src/order/builder"
+	"Polymarket15MinsCryptoArbitrageTool/src/order/model"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -20,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
+	// Official Polymarket order-utils library
 )
 
 // OrderType 订单类型
@@ -42,12 +45,14 @@ const (
 
 // ClobOrderClient 处理订单创建和提交到 Polymarket CLOB
 type ClobOrderClient struct {
-	privateKey   *ecdsa.PrivateKey
-	address      common.Address
-	orderBuilder *ExchangeOrderBuilder // 使用本地的 ExchangeOrderBuilder
-	credentials  *ClobAPICredentials
-	httpClient   *http.Client
-	chainID      *big.Int
+	privateKey    *ecdsa.PrivateKey
+	address       common.Address               // Maker 地址 (可能是代理钱包)
+	signerAddress common.Address               // Signer 地址 (EOA，用于签名)
+	isProxyWallet bool                         // 是否使用代理钱包
+	orderBuilder  builder.ExchangeOrderBuilder // 官方库的 ExchangeOrderBuilder
+	credentials   *ClobAPICredentials
+	httpClient    *http.Client
+	chainID       *big.Int
 }
 
 // ClobOrderResult 下单结果
@@ -121,7 +126,8 @@ const (
 )
 
 // NewClobOrderClient 创建新的订单客户端
-func NewClobOrderClient(privateKeyHex string) (*ClobOrderClient, error) {
+// makerAddress 可选，用于指定代理钱包地址。如果为空，则从私钥派生地址。
+func NewClobOrderClient(privateKeyHex string, makerAddress string) (*ClobOrderClient, error) {
 	// 移除 0x 前缀
 	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
@@ -136,23 +142,36 @@ func NewClobOrderClient(privateKeyHex string) (*ClobOrderClient, error) {
 		return nil, fmt.Errorf("无法解析私钥: %w", err)
 	}
 
-	// 从私钥派生地址
+	// 从私钥派生签名者 EOA 地址
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 	if !ok {
 		return nil, fmt.Errorf("无法获取公钥")
 	}
-	address := crypto.PubkeyToAddress(*publicKeyECDSA)
+	signerAddr := crypto.PubkeyToAddress(*publicKeyECDSA)
 
-	// 创建订单构建器 (使用本地的 ExchangeOrderBuilder)
-	orderBuilder := NewExchangeOrderBuilder(PolygonMainnetChainID, nil)
+	// 确定 Maker 地址：优先使用传入的 makerAddress（代理钱包），否则使用签名者地址
+	var makerAddr common.Address
+	isProxy := false
+	if makerAddress != "" {
+		makerAddr = common.HexToAddress(makerAddress)
+		isProxy = true
+		fmt.Printf("📋 使用代理钱包: Maker=%s, Signer=%s\n", makerAddr.Hex(), signerAddr.Hex())
+	} else {
+		makerAddr = signerAddr
+	}
+
+	// 创建订单构建器 (使用官方库的 ExchangeOrderBuilderImpl)
+	orderBuilder := builder.NewExchangeOrderBuilderImpl(PolygonMainnetChainID, nil)
 
 	return &ClobOrderClient{
-		privateKey:   privateKey,
-		address:      address,
-		orderBuilder: orderBuilder,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		chainID:      PolygonMainnetChainID,
+		privateKey:    privateKey,
+		address:       makerAddr,  // Maker 地址
+		signerAddress: signerAddr, // Signer 地址 (EOA)
+		isProxyWallet: isProxy,    // 是否代理钱包
+		orderBuilder:  orderBuilder,
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		chainID:       PolygonMainnetChainID,
 	}, nil
 }
 
@@ -250,25 +269,31 @@ func (c *ClobOrderClient) PlaceOrder(
 	// 获取当前 nonce (简化: 使用时间戳)
 	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
 
-	// 构建订单数据 (使用本地的 OrderData 类型)
-	orderData := &OrderData{
-		Maker:         c.address.Hex(),
+	// 构建订单数据 (使用官方库的 model.OrderData 类型)
+	// 注意: Maker 是资金所在地址 (可能是代理钱包), Signer 是签名的 EOA
+	// 签名类型: 代理钱包使用 POLY_PROXY (1), EOA 钱包使用 EOA (0)
+	sigType := model.EOA
+	if c.isProxyWallet {
+		sigType = model.POLY_PROXY
+	}
+	orderData := &model.OrderData{
+		Maker:         c.address.Hex(), // Maker 地址 (代理钱包或 EOA)
 		Taker:         OperatorAddress, // Polymarket 操作员地址
 		TokenId:       tokenID,
 		MakerAmount:   makerAmount.String(),
 		TakerAmount:   takerAmount.String(),
-		FeeRateBps:    "1000", // 15分钟市场要求的费率 (10%)
+		FeeRateBps:    "0",
 		Nonce:         nonce,
-		Signer:        c.address.Hex(),
+		Signer:        c.signerAddress.Hex(), // Signer 地址 (签名的 EOA)
 		Expiration:    expiration,
-		Side:          OrderBuilderSide(side),
-		SignatureType: EOA, // 从 Polymarket 导出的私钥是 EOA 类型
+		Side:          model.Side(side), // 使用官方库的 model.Side
+		SignatureType: sigType,          // 根据钱包类型自动选择
 	}
 
-	// 确定使用哪个合约 (测试: 使用普通 CTF Exchange)
-	verifyingContract := CTFExchange
+	// 确定使用哪个合约 (NegRisk 市场)
+	verifyingContract := model.NegRiskCTFExchange
 
-	// 构建并签名订单 (使用本地的 ExchangeOrderBuilder)
+	// 构建并签名订单 (使用官方库的 ExchangeOrderBuilder)
 	signedOrder, err := c.orderBuilder.BuildSignedOrder(c.privateKey, orderData, verifyingContract)
 	if err != nil {
 		return nil, fmt.Errorf("构建签名订单失败: %w", err)
@@ -330,11 +355,19 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("POLY_ADDRESS", c.address.Hex())
+	httpReq.Header.Set("POLY_ADDRESS", c.signerAddress.Hex()) // 使用 Signer (EOA) 地址，API Key 绑定在此
 	httpReq.Header.Set("POLY_SIGNATURE", signature)
 	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
 	httpReq.Header.Set("POLY_API_KEY", c.credentials.APIKey)
 	httpReq.Header.Set("POLY_PASSPHRASE", c.credentials.Passphrase)
+
+	// 🔍 DEBUG: 打印认证头信息
+	fmt.Printf("📋 [DEBUG] Auth Headers:\n")
+	fmt.Printf("   POLY_ADDRESS: %s\n", c.signerAddress.Hex())
+	fmt.Printf("   POLY_API_KEY: %s\n", c.credentials.APIKey)
+	fmt.Printf("   POLY_PASSPHRASE: %s\n", c.credentials.Passphrase)
+	fmt.Printf("   POLY_TIMESTAMP: %d\n", timestamp)
+	fmt.Printf("   POLY_SIGNATURE: %s\n", signature)
 
 	// 发送请求
 	resp, err := c.httpClient.Do(httpReq)
@@ -393,31 +426,31 @@ func (c *ClobOrderClient) signL2HMAC(method, path, body string, timestamp int64)
 		return "", fmt.Errorf("未设置 API Secret")
 	}
 
-	// 解码 Base64 格式的 API Secret (支持标准和 URL-safe Base64)
-	secret := c.credentials.APISecret
-	// 先将 URL-safe 转换为标准 Base64
-	secret = strings.ReplaceAll(secret, "-", "+")
-	secret = strings.ReplaceAll(secret, "_", "/")
-
-	secretBytes, err := base64.StdEncoding.DecodeString(secret)
+	// 1. 解码 API Secret (优先 URLEncoding，兼容 Polymarket 新版 Key)
+	secretBytes, err := base64.URLEncoding.DecodeString(c.credentials.APISecret)
 	if err != nil {
-		return "", fmt.Errorf("解码 API Secret 失败: %w", err)
+		// 尝试 RawURLEncoding (无 padding)
+		secretBytes, err = base64.RawURLEncoding.DecodeString(c.credentials.APISecret)
+		if err != nil {
+			// 最后尝试标准 StdEncoding
+			secretBytes, err = base64.StdEncoding.DecodeString(c.credentials.APISecret)
+			if err != nil {
+				return "", fmt.Errorf("解码 API Secret 失败: %w", err)
+			}
+		}
 	}
 
-	// 构建待签名消息: timestamp + method + path + body
+	// 2. 构建待签名消息: timestamp + method + path + body
 	message := strconv.FormatInt(timestamp, 10) + method + path + body
 
-	// 计算 HMAC-SHA256
+	// 3. 计算 HMAC-SHA256
 	h := hmac.New(sha256.New, secretBytes)
 	h.Write([]byte(message))
 	signatureBytes := h.Sum(nil)
 
-	// 返回 Base64 编码，然后转换为 URL-safe 格式
-	sig := base64.StdEncoding.EncodeToString(signatureBytes)
-	sig = strings.ReplaceAll(sig, "+", "-")
-	sig = strings.ReplaceAll(sig, "/", "_")
-
-	return sig, nil
+	// 4. 返回 URL-Safe Base64 编码 (带 padding)
+	// 服务端期望 URL-Safe 格式 (用 - 和 _ 代替 + 和 /)
+	return base64.URLEncoding.EncodeToString(signatureBytes), nil
 }
 
 // signL2Request 保留旧方法用于兼容性 (使用私钥签名，用于某些特殊端点)

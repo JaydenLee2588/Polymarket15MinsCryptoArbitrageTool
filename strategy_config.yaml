@@ -1,8 +1,8 @@
 groups:
   - id: "F1.95_88_320"
     # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.15%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
+    min_trend_percent_up: 0.0013      # 做多最小趋势阈值 (0.13%)
+    min_trend_percent_down: 0.0013    # 做空最小趋势阈值 (0.13%)
     min_price_edge: 0.08             # 最小价格优势
     fair_price_trend_factor: 1.95    # 趋势到公允价的转换系数
     trend_window_sec_start: 128       # 开盘后多少秒开始检测 (接近1分钟半)

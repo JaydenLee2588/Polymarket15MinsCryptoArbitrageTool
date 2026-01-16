@@ -1,4 +1,4 @@
-﻿// Package orderutils provides utilities for generating and signing Polymarket CLOB orders.
+﻿// Package src provides utilities for generating and signing Polymarket CLOB orders.
 // This is a vendored copy of github.com/polymarket/go-order-utils for security purposes.
 // Source: https://github.com/Polymarket/go-order-utils (MIT License)
 package src
@@ -137,67 +137,74 @@ func GetContracts(chainId int64) (*Contracts, error) {
 	}
 }
 
-// ==================== EIP712 Types ====================
+// ==================== ABI Types ====================
+// Types solidity=>go types from go-ethereum
 
 var (
-	Uint256, _ = abi.NewType("uint256", "", nil)
-	Uint8, _   = abi.NewType("uint8", "", nil)
-	Bytes32, _ = abi.NewType("bytes32", "", nil)
-	Address, _ = abi.NewType("address", "", nil)
+	abiUint256, _ = abi.NewType("uint256", "", nil)
+	abiUint8, _   = abi.NewType("uint8", "", nil)
+	abiBytes32, _ = abi.NewType("bytes32", "", nil)
+	abiAddress, _ = abi.NewType("address", "", nil)
 )
 
-var (
-	_EIP712_DOMAIN = []abi.Type{
-		Bytes32, // typehash
-		Bytes32, // name
-		Bytes32, // version
-		Uint256, // chainId
-		Address, // verifyingContract
-	}
+// ==================== EIP712 Constants ====================
 
+var (
+	// Pre-computed keccak256 hashes of name and version (as the official lib does)
+	_PROTOCOL_NAME    = crypto.Keccak256Hash([]byte("Polymarket CTF Exchange"))
+	_PROTOCOL_VERSION = crypto.Keccak256Hash([]byte("1"))
+
+	// EIP712Domain type hash
 	_EIP712_DOMAIN_HASH = crypto.Keccak256Hash(
 		[]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
 	)
+
+	// Order type hash - must match exactly what the contract expects
+	_ORDER_STRUCTURE_HASH = crypto.Keccak256Hash(
+		[]byte("Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"),
+	)
 )
 
-// ==================== Order Builder Constants ====================
-
-var (
-	_PROTOCOL_NAME    = crypto.Keccak256Hash([]byte("Polymarket CTF Exchange"))
-	_PROTOCOL_VERSION = crypto.Keccak256Hash([]byte("1"))
-)
-
-var _ORDER_STRUCTURE = []abi.Type{
-	Bytes32, // typehash
-	Uint256, // salt
-	Address, // maker
-	Address, // signer
-	Address, // taker
-	Uint256, // tokenId
-	Uint256, // makerAmount
-	Uint256, // takerAmount
-	Uint256, // expiration
-	Uint256, // nonce
-	Uint256, // feeRateBps
-	Uint8,   // side
-	Uint8,   // signatureType
+// EIP712 domain separator types for abi.Pack
+var _EIP712_DOMAIN_TYPES = []abi.Type{
+	abiBytes32, // typehash
+	abiBytes32, // name (keccak256)
+	abiBytes32, // version (keccak256)
+	abiUint256, // chainId
+	abiAddress, // verifyingContract
 }
 
-var _ORDER_STRUCTURE_HASH = crypto.Keccak256Hash(
-	[]byte("Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"),
-)
+// Order structure types for abi.Pack
+var _ORDER_STRUCTURE_TYPES = []abi.Type{
+	abiBytes32, // typehash
+	abiUint256, // salt
+	abiAddress, // maker
+	abiAddress, // signer
+	abiAddress, // taker
+	abiUint256, // tokenId
+	abiUint256, // makerAmount
+	abiUint256, // takerAmount
+	abiUint256, // expiration
+	abiUint256, // nonce
+	abiUint256, // feeRateBps
+	abiUint8,   // side
+	abiUint8,   // signatureType
+}
 
-// ==================== EIP712 Functions ====================
+// ==================== ABI Encoding ====================
 
-func encodeEIP712(args []abi.Type, values []interface{}) ([]byte, error) {
-	arguments := make([]abi.Argument, 0)
-	for _, t := range args {
-		argument := abi.Argument{Type: t}
-		arguments = append(arguments, argument)
+// abiEncode uses go-ethereum's abi.Pack for proper ABI encoding
+func abiEncode(types []abi.Type, values []interface{}) ([]byte, error) {
+	arguments := make([]abi.Argument, 0, len(types))
+	for _, t := range types {
+		arguments = append(arguments, abi.Argument{Type: t})
 	}
 	return abi.Arguments(arguments).Pack(values...)
 }
 
+// ==================== EIP712 Functions ====================
+
+// buildEIP712DomainSeparator creates the domain separator using abi.Pack
 func buildEIP712DomainSeparator(name, version common.Hash, chainId *big.Int, address common.Address) (common.Hash, error) {
 	values := []interface{}{
 		_EIP712_DOMAIN_HASH,
@@ -207,37 +214,83 @@ func buildEIP712DomainSeparator(name, version common.Hash, chainId *big.Int, add
 		address,
 	}
 
-	encodedDomainSeparator, err := encodeEIP712(_EIP712_DOMAIN, values)
+	encoded, err := abiEncode(_EIP712_DOMAIN_TYPES, values)
 	if err != nil {
 		return common.Hash{}, err
 	}
 
-	return crypto.Keccak256Hash(encodedDomainSeparator), nil
+	domainSeparator := crypto.Keccak256Hash(encoded)
+
+	// DEBUG: Format matching Python output
+	fmt.Println("\n======================================================================")
+	fmt.Println("[EIP-712 Hash Calculation - Go]")
+	fmt.Println("======================================================================")
+	fmt.Printf("\n1. EIP712_DOMAIN_HASH: %s\n", _EIP712_DOMAIN_HASH.Hex()[2:])
+	fmt.Printf("2. Name Hash:          %s\n", name.Hex()[2:])
+	fmt.Printf("3. Version Hash:       %s\n", version.Hex()[2:])
+	fmt.Printf("4. Domain Separator:   %s\n", domainSeparator.Hex()[2:])
+
+	return domainSeparator, nil
 }
 
-func hashTypedDataV4(domainSeparator common.Hash, args []abi.Type, values []interface{}) (common.Hash, error) {
-	encoded, err := encodeEIP712(args, values)
+// hashTypedDataV4 creates the EIP-712 hash of the order
+func hashTypedDataV4(domainSeparator common.Hash, order *Order) (common.Hash, error) {
+	values := []interface{}{
+		_ORDER_STRUCTURE_HASH,
+		order.Salt,
+		order.Maker,
+		order.Signer,
+		order.Taker,
+		order.TokenId,
+		order.MakerAmount,
+		order.TakerAmount,
+		order.Expiration,
+		order.Nonce,
+		order.FeeRateBps,
+		uint8(order.Side.Uint64()),          // side as uint8
+		uint8(order.SignatureType.Uint64()), // signatureType as uint8
+	}
+
+	encoded, err := abiEncode(_ORDER_STRUCTURE_TYPES, values)
 	if err != nil {
 		return common.Hash{}, err
 	}
 
-	rawData := []byte(fmt.Sprintf("\x19\x01%s%s", string(domainSeparator[:]), string(crypto.Keccak256Hash(encoded).Bytes())))
-	return crypto.Keccak256Hash(rawData), nil
+	orderStructHash := crypto.Keccak256Hash(encoded)
+
+	fmt.Printf("5. ORDER_TYPE_HASH:    %s\n", _ORDER_STRUCTURE_HASH.Hex()[2:])
+	fmt.Printf("6. Order Struct Hash:  %s\n", orderStructHash.Hex()[2:])
+
+	// EIP-712 final hash: keccak256("\x19\x01" ‖ domainSeparator ‖ structHash)
+	rawData := make([]byte, 0, 66) // 2 + 32 + 32
+	rawData = append(rawData, 0x19, 0x01)
+	rawData = append(rawData, domainSeparator[:]...)
+	rawData = append(rawData, orderStructHash[:]...)
+
+	finalHash := crypto.Keccak256Hash(rawData)
+
+	fmt.Printf("7. Final Message Hash: %s\n", finalHash.Hex()[2:])
+	fmt.Println("======================================================================")
+
+	return finalHash, nil
 }
 
 // ==================== Signer Functions ====================
 
 var ErrInvalidSignatureLen = errors.New("invalid signature length")
 
+// signOrderHash signs the order hash with the private key
+// IMPORTANT: V byte must be 27 or 28 per EIP-155
 func signOrderHash(privateKey *ecdsa.PrivateKey, hashedData common.Hash) ([]byte, error) {
 	sign, err := crypto.Sign(hashedData.Bytes(), privateKey)
 	if err != nil {
 		return nil, err
 	}
-	sign[64] += 27
-	return sign, err
+	sign[64] += 27 // EIP-155: Transform V from 0/1 to 27/28
+	return sign, nil
 }
 
+// validateSignature verifies that the signature matches the signer
 func validateSignature(signer common.Address, hashedData common.Hash, signature []byte) (bool, error) {
 	sigCopy := make([]byte, len(signature))
 	copy(sigCopy, signature)
@@ -246,6 +299,7 @@ func validateSignature(signer common.Address, hashedData common.Hash, signature 
 		return false, ErrInvalidSignatureLen
 	}
 
+	// Transform V from 27/28 back to 0/1 for ecrecover
 	if sigCopy[64] != 0 && sigCopy[64] != 1 {
 		sigCopy[64] -= 27
 	}
@@ -409,22 +463,7 @@ func (e *ExchangeOrderBuilder) BuildOrderHash(order *Order, contract VerifyingCo
 		return OrderHash{}, err
 	}
 
-	values := []interface{}{
-		_ORDER_STRUCTURE_HASH,
-		order.Salt,
-		order.Maker,
-		order.Signer,
-		order.Taker,
-		order.TokenId,
-		order.MakerAmount,
-		order.TakerAmount,
-		order.Expiration,
-		order.Nonce,
-		order.FeeRateBps,
-		uint8(order.Side.Uint64()),
-		uint8(order.SignatureType.Uint64()),
-	}
-	orderHash, err := hashTypedDataV4(domainSeparator, _ORDER_STRUCTURE, values)
+	orderHash, err := hashTypedDataV4(domainSeparator, order)
 	if err != nil {
 		return OrderHash{}, err
 	}

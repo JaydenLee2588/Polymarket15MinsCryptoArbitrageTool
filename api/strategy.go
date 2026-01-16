@@ -86,7 +86,8 @@ func StartSimulation(configs []StrategyConfig) bool {
 		}
 
 		// 创建 CLOB 订单客户端
-		client, err := src.NewClobOrderClient(privateKey)
+		makerAddress := os.Getenv("MAKER_ADDRESS") // 可选，用于代理钱包
+		client, err := src.NewClobOrderClient(privateKey, makerAddress)
 		if err != nil {
 			log.Printf("❌ 创建 ClobOrderClient 失败: %v", err)
 			return false
@@ -113,7 +114,11 @@ func StartSimulation(configs []StrategyConfig) bool {
 		clobOrderClient = client
 		clobClientMu.Unlock()
 
-		log.Printf("✅ 真实交易模式已启用，钱包地址: %s", client.GetAddress())
+		// 调试：打印凭证绑定的地址信息
+		log.Printf("✅ 真实交易模式已启用")
+		log.Printf("   Maker 地址 (订单创建者): %s", client.GetAddress())
+		log.Printf("   Signer 地址 (API Key 绑定): %s", authClient.GetAddress())
+		log.Printf("   API Key (前8位): %s...", creds.APIKey[:8])
 	}
 
 	isSimRunning = true
