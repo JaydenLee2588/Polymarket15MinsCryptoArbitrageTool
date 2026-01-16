@@ -10,6 +10,38 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// GetFullOrderbook 获取完整的订单簿 (使用 src/payload.go 中定义的结构)
+func (c *ClobOrderClient) GetFullOrderbook(ctx context.Context, tokenID string) (*AggOrderbook, error) {
+	url := fmt.Sprintf("%s/book?token_id=%s", ClobHost, tokenID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API错误 (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var orderbook AggOrderbook
+	if err := json.Unmarshal(body, &orderbook); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	return &orderbook, nil
+}
+
 // OrderbookDepthResult 订单簿深度查询结果
 type OrderbookDepthResult struct {
 	AvailableSize float64 // 指定价格的可用数量
@@ -34,46 +66,9 @@ func (c *ClobOrderClient) GetOrderbookDepth(
 	targetPrice float64,
 	side string,
 ) (*OrderbookDepthResult, error) {
-	// 构建请求URL
-	url := fmt.Sprintf("%s/book?token_id=%s", ClobHost, tokenID)
-
-	// 创建HTTP请求
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	orderbook, err := c.GetFullOrderbook(ctx, tokenID)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	// 发送请求（orderbook是公开数据，无需认证）
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	// 检查HTTP状态码
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API错误 (%d): %s", resp.StatusCode, string(body))
-	}
-
-	// 解析响应
-	var orderbook struct {
-		Asks []struct {
-			Price decimal.Decimal `json:"price"`
-			Size  decimal.Decimal `json:"size"`
-		} `json:"asks"`
-		Bids []struct {
-			Price decimal.Decimal `json:"price"`
-			Size  decimal.Decimal `json:"size"`
-		} `json:"bids"`
-	}
-
-	if err := json.Unmarshal(body, &orderbook); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
+		return nil, err
 	}
 
 	result := &OrderbookDepthResult{}

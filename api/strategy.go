@@ -85,24 +85,64 @@ func StartSimulation(configs []StrategyConfig) bool {
 			return false
 		}
 
-		// 创建 CLOB 订单客户端
-		makerAddress := os.Getenv("MAKER_ADDRESS") // 可选，用于代理钱包
-		client, err := src.NewClobOrderClient(privateKey, makerAddress)
+		// 检查是否配置了代理钱包地址
+		// 优先使用环境变量 PROXY_WALLET_ADDRESS（推荐方式）
+		makerAddress := ""
+
+		proxyWalletAddr := os.Getenv("PROXY_WALLET_ADDRESS")
+		if proxyWalletAddr != "" {
+			makerAddress = proxyWalletAddr
+			log.Printf("📋 使用代理钱包 (来自 PROXY_WALLET_ADDRESS): %s", proxyWalletAddr)
+		} else {
+			// 兼容旧配置 MAKER_ADDRESS
+			envMakerAddr := os.Getenv("MAKER_ADDRESS")
+			if envMakerAddr != "" {
+				makerAddress = envMakerAddr
+				log.Printf("📋 使用代理钱包 (来自 MAKER_ADDRESS): %s", envMakerAddr)
+			} else {
+				log.Printf("ℹ️  未配置代理钱包地址，将使用 EOA 直接签名")
+			}
+		}
+
+		// ========== 检查是否有手动配置的 API 凭证 (Google 登录用户) ==========
+		var creds *src.ClobAPICredentials
+		manualAPIKey := os.Getenv("POLY_API_KEY")
+		manualAPISecret := os.Getenv("POLY_API_SECRET")
+		manualPassphrase := os.Getenv("POLY_PASSPHRASE")
+		manualEOAAddress := os.Getenv("POLY_EOA_ADDRESS")
+
+		if manualAPIKey != "" && manualAPISecret != "" && manualPassphrase != "" {
+			// 使用手动配置的凭证
+			creds = &src.ClobAPICredentials{
+				APIKey:     manualAPIKey,
+				APISecret:  manualAPISecret,
+				Passphrase: manualPassphrase,
+			}
+			log.Printf("📋 使用手动配置的 API 凭证")
+			log.Printf("   EOA 地址 (API 绑定): %s", manualEOAAddress)
+			log.Printf("   API Key (前8位): %s...", manualAPIKey[:8])
+		} else {
+			// 自动派生 API 凭证
+			authClient, err := src.NewAuthClient(privateKey)
+			if err != nil {
+				log.Printf("❌ 创建 AuthClient 失败: %v", err)
+				return false
+			}
+
+			creds, err = authClient.DeriveAPICredentials(context.Background())
+			if err != nil {
+				log.Printf("❌ 派生 API 凭证失败: %v", err)
+				return false
+			}
+			log.Printf("📋 自动派生 API 凭证")
+			log.Printf("   Signer 地址 (API Key 绑定): %s", authClient.GetAddress())
+			log.Printf("   API Key (前8位): %s...", creds.APIKey[:8])
+		}
+
+		// 创建 ClobOrderClient (使用手动 EOA 地址或为空)
+		client, err := src.NewClobOrderClientWithEOA(privateKey, makerAddress, manualEOAAddress)
 		if err != nil {
 			log.Printf("❌ 创建 ClobOrderClient 失败: %v", err)
-			return false
-		}
-
-		// 派生 API 凭证
-		authClient, err := src.NewAuthClient(privateKey)
-		if err != nil {
-			log.Printf("❌ 创建 AuthClient 失败: %v", err)
-			return false
-		}
-
-		creds, err := authClient.DeriveAPICredentials(context.Background())
-		if err != nil {
-			log.Printf("❌ 派生 API 凭证失败: %v", err)
 			return false
 		}
 
@@ -117,8 +157,7 @@ func StartSimulation(configs []StrategyConfig) bool {
 		// 调试：打印凭证绑定的地址信息
 		log.Printf("✅ 真实交易模式已启用")
 		log.Printf("   Maker 地址 (订单创建者): %s", client.GetAddress())
-		log.Printf("   Signer 地址 (API Key 绑定): %s", authClient.GetAddress())
-		log.Printf("   API Key (前8位): %s...", creds.APIKey[:8])
+		log.Printf("   API 请求地址: %s", client.GetAPIAddress())
 	}
 
 	isSimRunning = true
@@ -773,50 +812,57 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
-		// ==== 渐进式深度检查 (FOK/FAK) ====
+		// ==== 深度检查 (FOK/FAK) (优化方案：单次 API 调用，简化逻辑) ====
 		finalPrice := price // 最终下单价格
 		if config.OrderType == "FOK" || config.OrderType == "FAK" {
 			maxPrice := price + config.MaxSlippage
-			tickSize := config.PriceTickSize
-			if tickSize <= 0 {
-				tickSize = 0.01 // 默认 1 美分
+
+			// 获取完整订单簿 (单次调用)
+			depthCtx, dc := context.WithTimeout(context.Background(), 5*time.Second)
+			orderbook, err := client.GetFullOrderbook(depthCtx, tokenID)
+			dc()
+
+			if err != nil {
+				log.Printf("❌ [%s] 获取深度失败 (API错误): %v", config.ID, err)
+				return
 			}
 
-			foundDepth := false
-			checkPrice := price
+			// 计算当前价格 (price) 处的可用深度
+			priceDec := src.ToDecimal(price)
+			availableAtPrice := 0.0
+			for _, ask := range orderbook.Asks {
+				if ask.Price.LessThanOrEqual(priceDec) {
+					s, _ := ask.Size.Float64()
+					availableAtPrice += s
+				}
+			}
 
-			for checkPrice <= maxPrice {
-				depthCtx, dc := context.WithTimeout(context.Background(), 3*time.Second)
-				depth, err := client.GetOrderbookDepth(depthCtx, tokenID, checkPrice, "BUY")
-				dc()
-
-				if err == nil && depth.AvailableSize >= amount {
-					// 找到足够深度
-					finalPrice = checkPrice
-					foundDepth = true
-					if checkPrice > price {
-						log.Printf("📈 [%s] 滑点调整: %.3f → %.3f (深度=%.2f)", config.ID, price, checkPrice, depth.AvailableSize)
+			if availableAtPrice >= amount {
+				// 当前价格深度足够，直接使用
+				finalPrice = price
+			} else {
+				// 当前价格深度不足，检查最大滑点价格
+				maxPriceDec := src.ToDecimal(maxPrice)
+				availableAtMaxPrice := 0.0
+				for _, ask := range orderbook.Asks {
+					if ask.Price.LessThanOrEqual(maxPriceDec) {
+						s, _ := ask.Size.Float64()
+						availableAtMaxPrice += s
 					}
-					break
 				}
 
-				// 增加价格继续检查
-				checkPrice += tickSize
-			}
-
-			if !foundDepth {
-				// 在滑点范围内仍然没有足够深度，尝试最大滑点价格
-				depthCtx, dc := context.WithTimeout(context.Background(), 3*time.Second)
-				depth, err := client.GetOrderbookDepth(depthCtx, tokenID, maxPrice, "BUY")
-				dc()
-
-				if err == nil && depth.AvailableSize > 0 {
-					// 有部分深度可用
-					log.Printf("⚠️ [%s] 深度不足，使用最大滑点 (%.3f) 部分成交: %.2f → %.2f", config.ID, maxPrice, amount, depth.AvailableSize)
+				if availableAtMaxPrice >= amount {
+					// 最大滑点价格处深度足够
 					finalPrice = maxPrice
-					amount = depth.AvailableSize
+					log.Printf("📈 [%s] 滑点调整: %.3f → %.3f (深度=%.2f)", config.ID, price, maxPrice, availableAtMaxPrice)
+				} else if availableAtMaxPrice > 0 {
+					// FAK 模式下允许部分成交
+					log.Printf("⚠️ [%s] 深度不足，使用最大滑点 (%.3f) 部分成交: %.2f → %.2f", config.ID, maxPrice, amount, availableAtMaxPrice)
+					finalPrice = maxPrice
+					amount = availableAtMaxPrice
 				} else {
-					log.Printf("⚠️ [%s] 滑点范围 (%.3f~%.3f) 内无可用深度，跳过下单", config.ID, price, maxPrice)
+					// 完全没有深度
+					log.Printf("⚠️ [%s] 滑点范围 (%.3f~%.3f) 内确实无可用深度，跳过下单", config.ID, price, maxPrice)
 					return
 				}
 			}

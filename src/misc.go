@@ -6,7 +6,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
+
+// ToDecimal 将 float64 转换为 decimal.Decimal
+func ToDecimal(val float64) decimal.Decimal {
+	return decimal.NewFromFloat(val)
+}
 
 // GetOpenInterest 获取市场的未平仓合约
 func (c *Client) GetOpenInterest(ctx context.Context, params *GetOpenInterestParams) ([]OpenInterest, error) {
@@ -63,4 +70,3 @@ func (c *Client) GetLiveVolume(ctx context.Context, params *GetLiveVolumeParams)
 
 	return liveVolume, nil
 }
-

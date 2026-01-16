@@ -48,6 +48,7 @@ type ClobOrderClient struct {
 	privateKey    *ecdsa.PrivateKey
 	address       common.Address               // Maker 地址 (可能是代理钱包)
 	signerAddress common.Address               // Signer 地址 (EOA，用于签名)
+	apiAddress    common.Address               // API 请求使用的地址 (POLY_ADDRESS header)
 	isProxyWallet bool                         // 是否使用代理钱包
 	orderBuilder  builder.ExchangeOrderBuilder // 官方库的 ExchangeOrderBuilder
 	credentials   *ClobAPICredentials
@@ -128,6 +129,13 @@ const (
 // NewClobOrderClient 创建新的订单客户端
 // makerAddress 可选，用于指定代理钱包地址。如果为空，则从私钥派生地址。
 func NewClobOrderClient(privateKeyHex string, makerAddress string) (*ClobOrderClient, error) {
+	return NewClobOrderClientWithEOA(privateKeyHex, makerAddress, "")
+}
+
+// NewClobOrderClientWithEOA 创建新的订单客户端 (支持手动 API EOA 地址)
+// makerAddress 可选，用于指定代理钱包地址。如果为空，则从私钥派生地址。
+// apiEOAAddress 可选，用于 POLY_ADDRESS HTTP 头。对于 Google 登录用户，这是 API 凭证绑定的 EOA 地址。
+func NewClobOrderClientWithEOA(privateKeyHex string, makerAddress string, apiEOAAddress string) (*ClobOrderClient, error) {
 	// 移除 0x 前缀
 	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
@@ -161,6 +169,15 @@ func NewClobOrderClient(privateKeyHex string, makerAddress string) (*ClobOrderCl
 		makerAddr = signerAddr
 	}
 
+	// 确定 API 请求地址：优先使用手动 EOA 地址，否则使用签名者地址
+	var apiAddr common.Address
+	if apiEOAAddress != "" {
+		apiAddr = common.HexToAddress(apiEOAAddress)
+		fmt.Printf("📋 使用手动 API EOA 地址: %s\n", apiAddr.Hex())
+	} else {
+		apiAddr = signerAddr
+	}
+
 	// 创建订单构建器 (使用官方库的 ExchangeOrderBuilderImpl)
 	orderBuilder := builder.NewExchangeOrderBuilderImpl(PolygonMainnetChainID, nil)
 
@@ -168,6 +185,7 @@ func NewClobOrderClient(privateKeyHex string, makerAddress string) (*ClobOrderCl
 		privateKey:    privateKey,
 		address:       makerAddr,  // Maker 地址
 		signerAddress: signerAddr, // Signer 地址 (EOA)
+		apiAddress:    apiAddr,    // API 请求使用的地址
 		isProxyWallet: isProxy,    // 是否代理钱包
 		orderBuilder:  orderBuilder,
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
@@ -183,6 +201,11 @@ func (c *ClobOrderClient) SetCredentials(creds *ClobAPICredentials) {
 // GetAddress 返回钱包地址
 func (c *ClobOrderClient) GetAddress() string {
 	return c.address.Hex()
+}
+
+// GetAPIAddress 返回 API 请求使用的地址 (POLY_ADDRESS header)
+func (c *ClobOrderClient) GetAPIAddress() string {
+	return c.apiAddress.Hex()
 }
 
 // PlaceOrder 下单（核心函数）
@@ -243,7 +266,15 @@ func (c *ClobOrderClient) PlaceOrder(
 
 	if side == ClobOrderSideBuy {
 		// BUY: 支付 price * size USDC，获得 size shares
-		usdcAmount := priceDecimal.Mul(sizeDecimal).Mul(multiplier)
+		// API 限制: Market Buy 的 makerAmount (USDC) 最多支持 2 位小数 (即 0.01 精度)
+		// 我们先计算 float 值的 usdcAmount
+		rawUSDC := priceDecimal.Mul(sizeDecimal)
+		// 截断到 2 位小数 (Floor)
+		truncatedUSDC := rawUSDC.Mul(decimal.NewFromInt(100)).Floor().Div(decimal.NewFromInt(100))
+
+		// 转换为 6 位精度的整数 (Polymarket 使用 6 位精度)
+		usdcAmount := truncatedUSDC.Mul(multiplier)
+
 		sharesAmount := sizeDecimal.Mul(multiplier)
 		makerAmount = usdcAmount.BigInt()
 		takerAmount = sharesAmount.BigInt()
@@ -276,13 +307,16 @@ func (c *ClobOrderClient) PlaceOrder(
 	if c.isProxyWallet {
 		sigType = model.POLY_PROXY
 	}
+	// 🔍 DEBUG: 确认签名类型
+	fmt.Printf("🔐 [DEBUG] 签名配置: Maker=%s, Signer=%s, Type=%d (0=EOA, 1=PROXY, 2=SAFE)\n",
+		c.address.Hex(), c.signerAddress.Hex(), sigType)
 	orderData := &model.OrderData{
 		Maker:         c.address.Hex(), // Maker 地址 (代理钱包或 EOA)
 		Taker:         OperatorAddress, // Polymarket 操作员地址
 		TokenId:       tokenID,
 		MakerAmount:   makerAmount.String(),
 		TakerAmount:   takerAmount.String(),
-		FeeRateBps:    "0",
+		FeeRateBps:    "1000",
 		Nonce:         nonce,
 		Signer:        c.signerAddress.Hex(), // Signer 地址 (签名的 EOA)
 		Expiration:    expiration,
@@ -290,8 +324,11 @@ func (c *ClobOrderClient) PlaceOrder(
 		SignatureType: sigType,          // 根据钱包类型自动选择
 	}
 
-	// 确定使用哪个合约 (NegRisk 市场)
-	verifyingContract := model.NegRiskCTFExchange
+	// 确定使用哪个合约
+	// 注意：大多数简单的二元市场 (Yes/No) 使用 CTFExchange
+	// NegRisk 市场 (互斥的多选项) 使用 NegRiskCTFExchange
+	// 这里默认改为标准 CTFExchange，因为 Crypto 15m 通常是二元期权
+	verifyingContract := model.CTFExchange
 
 	// 构建并签名订单 (使用官方库的 ExchangeOrderBuilder)
 	signedOrder, err := c.orderBuilder.BuildSignedOrder(c.privateKey, orderData, verifyingContract)
@@ -355,7 +392,7 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("POLY_ADDRESS", c.signerAddress.Hex()) // 使用 Signer (EOA) 地址，API Key 绑定在此
+	httpReq.Header.Set("POLY_ADDRESS", c.apiAddress.Hex()) // 使用 API EOA 地址，API Key 绑定在此
 	httpReq.Header.Set("POLY_SIGNATURE", signature)
 	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
 	httpReq.Header.Set("POLY_API_KEY", c.credentials.APIKey)
@@ -363,7 +400,7 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 
 	// 🔍 DEBUG: 打印认证头信息
 	fmt.Printf("📋 [DEBUG] Auth Headers:\n")
-	fmt.Printf("   POLY_ADDRESS: %s\n", c.signerAddress.Hex())
+	fmt.Printf("   POLY_ADDRESS: %s\n", c.apiAddress.Hex())
 	fmt.Printf("   POLY_API_KEY: %s\n", c.credentials.APIKey)
 	fmt.Printf("   POLY_PASSPHRASE: %s\n", c.credentials.Passphrase)
 	fmt.Printf("   POLY_TIMESTAMP: %d\n", timestamp)
