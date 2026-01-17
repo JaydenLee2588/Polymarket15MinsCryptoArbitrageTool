@@ -36,6 +36,10 @@ type MarketState struct {
 
 	// 跳过标记
 	Leg1SkippedHighPrice bool
+
+	// 错误追踪 (用于冷却机制)
+	LastOrderErrorTime time.Time
+	LastOrderError     string
 }
 
 // 全局状态
@@ -699,6 +703,21 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		return
 	}
 
+	// 冷却检查：如果最近发生过错误，跳过
+	if !state.LastOrderErrorTime.IsZero() {
+		cooldown := 30 * time.Second
+		// 如果是余额不足或权限问题，设置更长的冷却时间 (5分钟)
+		if strings.Contains(strings.ToLower(state.LastOrderError), "balance") ||
+			strings.Contains(strings.ToLower(state.LastOrderError), "allowance") ||
+			strings.Contains(strings.ToLower(state.LastOrderError), "unauthorized") {
+			cooldown = 5 * time.Minute
+		}
+
+		if time.Since(state.LastOrderErrorTime) < cooldown {
+			return
+		}
+	}
+
 	// 检查时间窗口
 	now := time.Now()
 	elapsed := now.Sub(state.StartTime)
@@ -723,7 +742,7 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 
 	// 判断方向
 	var targetSide string
-	if trendPercent >= config.MinTrendPercentUp {
+	if trendPercent > config.MinTrendPercentUp {
 		targetSide = "UP"
 	} else if trendPercent <= -config.MinTrendPercentDown {
 		targetSide = "DOWN"
@@ -766,7 +785,7 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	}
 
 	// 检查价格范围
-	if price < config.Leg0SharePrice0 {
+	if price <= config.Leg0SharePrice0 {
 		log.Printf("⚠️ [%s][%s] 价格 %.3f 低于阈值 %.2f，跳过", state.ConfigGroup, state.Slug, price, config.Leg0SharePrice0)
 		return
 	}
@@ -892,11 +911,15 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 
 		if orderErr != nil {
 			log.Printf("❌ [%s] 下单失败: %v", config.ID, orderErr)
+			state.LastOrderErrorTime = time.Now()
+			state.LastOrderError = orderErr.Error()
 			return
 		}
 
 		if !orderResult.Success {
 			log.Printf("❌ [%s] 下单被拒绝: %s", config.ID, orderResult.ErrorMsg)
+			state.LastOrderErrorTime = time.Now()
+			state.LastOrderError = orderResult.ErrorMsg
 			return
 		}
 

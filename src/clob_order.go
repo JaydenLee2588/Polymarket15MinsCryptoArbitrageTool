@@ -297,8 +297,11 @@ func (c *ClobOrderClient) PlaceOrder(
 		expiration = "0"
 	}
 
-	// 获取当前 nonce (简化: 使用时间戳)
-	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
+	// 获取当前 nonce
+	// Polymarket 的 nonce 验证规则: order.nonce >= maker 在链上的 nonce
+	// 大多数账户的链上 nonce 为 0，所以使用 "0" 是安全的
+	// 订单的唯一性由 salt 字段保证
+	nonce := "0"
 
 	// 构建订单数据 (使用官方库的 model.OrderData 类型)
 	// 注意: Maker 是资金所在地址 (可能是代理钱包), Signer 是签名的 EOA

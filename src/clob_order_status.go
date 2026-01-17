@@ -62,7 +62,7 @@ func (c *ClobOrderClient) GetOrderStatus(ctx context.Context, orderID string) (*
 
 	// 添加 L2 认证头 (使用下划线格式，与官方客户端一致)
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("POLY_ADDRESS", c.address.Hex())
+	httpReq.Header.Set("POLY_ADDRESS", c.apiAddress.Hex())
 	httpReq.Header.Set("POLY_SIGNATURE", signature)
 	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
 	httpReq.Header.Set("POLY_API_KEY", c.credentials.APIKey)
