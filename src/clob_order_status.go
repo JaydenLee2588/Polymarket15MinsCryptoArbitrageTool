@@ -16,21 +16,21 @@ import (
 
 // OrderStatusResponse 订单状态响应
 type OrderStatusResponse struct {
-	OrderID      string `json:"id"`
-	MarketHash   string `json:"market"`
-	AssetID      string `json:"asset_id"`
-	OrderType    string `json:"order_type"`
-	Status       string `json:"status"` // "LIVE", "MATCHED", "CANCELLED", etc.
-	Side         string `json:"side"`   // "BUY" or "SELL"
-	Price        string `json:"price"`
-	Size         string `json:"size"`
-	SizeMatched  string `json:"size_matched"`
-	OriginalSize string `json:"original_size"`
-	Owner        string `json:"owner"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	ExpiresAt    string `json:"expires_at"`
-	MakerAddress string `json:"maker_address"`
+	OrderID      string      `json:"id"`
+	MarketHash   string      `json:"market"`
+	AssetID      string      `json:"asset_id"`
+	OrderType    string      `json:"order_type"`
+	Status       string      `json:"status"` // "LIVE", "MATCHED", "CANCELLED", etc.
+	Side         string      `json:"side"`   // "BUY" or "SELL"
+	Price        interface{} `json:"price"`
+	Size         interface{} `json:"size"`
+	SizeMatched  interface{} `json:"size_matched"`
+	OriginalSize interface{} `json:"original_size"`
+	Owner        string      `json:"owner"`
+	CreatedAt    interface{} `json:"created_at"`
+	UpdatedAt    interface{} `json:"updated_at"`
+	ExpiresAt    interface{} `json:"expires_at"`
+	MakerAddress string      `json:"maker_address"`
 }
 
 // GetOrderStatus 查询订单状态

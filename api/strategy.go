@@ -939,12 +939,8 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			log.Printf("✅ [%s] 订单成交验证成功（第%d次查询）", config.ID, verifyResult.Attempts)
 
 			// 解析实际成交量和价格
-			if fs, err := strconv.ParseFloat(status.SizeMatched, 64); err == nil {
-				filledAmount = fs
-			}
-			if fp, err := strconv.ParseFloat(status.Price, 64); err == nil {
-				filledPrice = fp
-			}
+			filledAmount = anyToFloat(status.SizeMatched)
+			filledPrice = anyToFloat(status.Price)
 			cost = filledPrice * filledAmount
 
 			// 检查是否部分成交
@@ -1246,5 +1242,27 @@ func loadPendingFromDatabase(
 				log.Printf("❌ 更新决议失败: %v", err)
 			}
 		}
+	}
+}
+
+// anyToFloat 将 interface{} 转换为 float64，支持 string, float64, int 等
+func anyToFloat(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
+		return f
+	default:
+		return 0
 	}
 }
