@@ -1,9 +1,9 @@
 groups:
-  - id: "标准模式"
+  - id: "标准保守模式"
     # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
+    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
     min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
+    min_price_edge: 0.05              # 最小价格优势
     fair_price_trend_factor: 1.95     # 趋势到公允价的转换系数
     trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
     trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)

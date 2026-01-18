@@ -402,12 +402,12 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	httpReq.Header.Set("POLY_PASSPHRASE", c.credentials.Passphrase)
 
 	// 🔍 DEBUG: 打印认证头信息
-	fmt.Printf("📋 [DEBUG] Auth Headers:\n")
-	fmt.Printf("   POLY_ADDRESS: %s\n", c.apiAddress.Hex())
-	fmt.Printf("   POLY_API_KEY: %s\n", c.credentials.APIKey)
-	fmt.Printf("   POLY_PASSPHRASE: %s\n", c.credentials.Passphrase)
-	fmt.Printf("   POLY_TIMESTAMP: %d\n", timestamp)
-	fmt.Printf("   POLY_SIGNATURE: %s\n", signature)
+	//fmt.Printf("📋 [DEBUG] Auth Headers:\n")
+	//fmt.Printf("   POLY_ADDRESS: %s\n", c.apiAddress.Hex())
+	//fmt.Printf("   POLY_API_KEY: %s\n", c.credentials.APIKey)
+	//fmt.Printf("   POLY_PASSPHRASE: %s\n", c.credentials.Passphrase)
+	//fmt.Printf("   POLY_TIMESTAMP: %d\n", timestamp)
+	//fmt.Printf("   POLY_SIGNATURE: %s\n", signature)
 
 	// 发送请求
 	resp, err := c.httpClient.Do(httpReq)
