@@ -744,7 +744,7 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	var targetSide string
 	if trendPercent > config.MinTrendPercentUp {
 		targetSide = "UP"
-	} else if trendPercent <= -config.MinTrendPercentDown {
+	} else if trendPercent < -config.MinTrendPercentDown {
 		targetSide = "DOWN"
 	} else {
 		return // 趋势不够明显
@@ -831,65 +831,12 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
-		// ==== 深度检查 (FOK/FAK) (优化方案：单次 API 调用，简化逻辑) ====
-		finalPrice := price // 最终下单价格
+		// ==== 价格设置 (已移除深度预检查以减少延迟) ====
+		// 对于 FOK/FAK 模式，直接使用 price + MaxSlippage 作为限价
+		// Polymarket 的 FOK/FAK 机制会自动保证成交质量
+		finalPrice := price
 		if config.OrderType == "FOK" || config.OrderType == "FAK" {
-			maxPrice := price + config.MaxSlippage
-
-			// 获取完整订单簿 (单次调用)
-			depthCtx, dc := context.WithTimeout(context.Background(), 5*time.Second)
-			orderbook, err := client.GetFullOrderbook(depthCtx, tokenID)
-			dc()
-
-			if err != nil {
-				log.Printf("❌ [%s] 获取深度失败 (API错误): %v", config.ID, err)
-				return
-			}
-
-			// 计算当前价格 (price) 处的可用深度
-			priceDec := src.ToDecimal(price)
-			availableAtPrice := 0.0
-			for _, ask := range orderbook.Asks {
-				if ask.Price.LessThanOrEqual(priceDec) {
-					s, _ := ask.Size.Float64()
-					availableAtPrice += s
-				}
-			}
-
-			if availableAtPrice >= amount {
-				// 当前价格深度足够，直接使用
-				finalPrice = price
-			} else {
-				// 当前价格深度不足，检查最大滑点价格
-				maxPriceDec := src.ToDecimal(maxPrice)
-				availableAtMaxPrice := 0.0
-				for _, ask := range orderbook.Asks {
-					if ask.Price.LessThanOrEqual(maxPriceDec) {
-						s, _ := ask.Size.Float64()
-						availableAtMaxPrice += s
-					}
-				}
-
-				if availableAtMaxPrice >= amount {
-					// 最大滑点价格处深度足够
-					finalPrice = maxPrice
-					log.Printf("📈 [%s] 滑点调整: %.3f → %.3f (深度=%.2f)", config.ID, price, maxPrice, availableAtMaxPrice)
-				} else if availableAtMaxPrice > 0 {
-					// FAK 模式下允许部分成交
-					log.Printf("⚠️ [%s] 深度不足，使用最大滑点 (%.3f) 部分成交: %.2f → %.2f", config.ID, maxPrice, amount, availableAtMaxPrice)
-					finalPrice = maxPrice
-					amount = availableAtMaxPrice
-				} else {
-					// 完全没有深度
-					log.Printf("⚠️ [%s] 滑点范围 (%.3f~%.3f) 内确实无可用深度，跳过下单", config.ID, price, maxPrice)
-					return
-				}
-			}
-
-			if amount <= 0.000001 {
-				log.Printf("⚠️ [%s] 可用数量不足 (%.6f)，跳过下单", config.ID, amount)
-				return
-			}
+			finalPrice = price + config.MaxSlippage
 		}
 
 		// 根据 OrderType 选择下单方式 (使用 finalPrice)
@@ -898,12 +845,18 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		var orderErr error
 
 		if config.OrderType == "GTC" {
+			log.Printf("🚀 [%s] 准备下单: 市场=%s, 方向=%s, 数量=%.2f, 预计最大成本=$%.2f",
+				config.ID, state.Slug, targetSide, amount, finalPrice*amount)
 			// 限价单 (GTC) - 做 maker，避免 taker 费用
 			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, finalPrice, amount)
 		} else if config.OrderType == "FAK" {
+			log.Printf("🚀 [%s] 准备下单: 市场=%s, 方向=%s, 数量=%.2f, 预计最大成本=$%.2f",
+				config.ID, state.Slug, targetSide, amount, finalPrice*amount)
 			// 市价单 FAK - 允许部分成交
 			orderResult, orderErr = client.PlaceMarketBuyOrderFAK(ctx, tokenID, finalPrice, amount, 30)
 		} else {
+			log.Printf("🚀 [%s] 准备下单: 市场=%s, 方向=%s, 数量=%.2f, 预计最大成本=$%.2f",
+				config.ID, state.Slug, targetSide, amount, finalPrice*amount)
 			// 市价单 FOK - 必须全部成交（默认）
 			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, finalPrice, amount, 30)
 		}
