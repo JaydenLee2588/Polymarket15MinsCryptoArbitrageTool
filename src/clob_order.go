@@ -395,6 +395,13 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	// 🛡️ [Anti-bot] 添加浏览器伪装 Header 以绕过 Cloudflare WAF (EC2 必须)
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	httpReq.Header.Set("Origin", "https://polymarket.com")
+	httpReq.Header.Set("Referer", "https://polymarket.com/")
+
 	httpReq.Header.Set("POLY_ADDRESS", c.apiAddress.Hex()) // 使用 API EOA 地址，API Key 绑定在此
 	httpReq.Header.Set("POLY_SIGNATURE", signature)
 	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
