@@ -3,7 +3,6 @@
 import (
 	"Polymarket15MinsCryptoArbitrageTool/src/order/builder"
 	"Polymarket15MinsCryptoArbitrageTool/src/order/model"
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/hmac"
@@ -12,17 +11,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Danny-Dasilva/CycleTLS/cycletls"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
-	// Official Polymarket order-utils library
 )
 
 // OrderType 订单类型
@@ -45,15 +43,16 @@ const (
 
 // ClobOrderClient 处理订单创建和提交到 Polymarket CLOB
 type ClobOrderClient struct {
-	privateKey    *ecdsa.PrivateKey
-	address       common.Address               // Maker 地址 (可能是代理钱包)
-	signerAddress common.Address               // Signer 地址 (EOA，用于签名)
-	apiAddress    common.Address               // API 请求使用的地址 (POLY_ADDRESS header)
-	isProxyWallet bool                         // 是否使用代理钱包
-	orderBuilder  builder.ExchangeOrderBuilder // 官方库的 ExchangeOrderBuilder
-	credentials   *ClobAPICredentials
-	httpClient    *http.Client
-	chainID       *big.Int
+	privateKey     *ecdsa.PrivateKey
+	address        common.Address               // Maker 地址 (可能是代理钱包)
+	signerAddress  common.Address               // Signer 地址 (EOA，用于签名)
+	apiAddress     common.Address               // API 请求使用的地址 (POLY_ADDRESS header)
+	isProxyWallet  bool                         // 是否使用代理钱包
+	orderBuilder   builder.ExchangeOrderBuilder // 官方库的 ExchangeOrderBuilder
+	credentials    *ClobAPICredentials
+	httpClient     *http.Client      // 标准 HTTP 客户端 (用于兼容其他文件)
+	cycleTLSClient cycletls.CycleTLS // CycleTLS 客户端 (用于绕过 Cloudflare)
+	chainID        *big.Int
 }
 
 // ClobOrderResult 下单结果
@@ -181,15 +180,19 @@ func NewClobOrderClientWithEOA(privateKeyHex string, makerAddress string, apiEOA
 	// 创建订单构建器 (使用官方库的 ExchangeOrderBuilderImpl)
 	orderBuilder := builder.NewExchangeOrderBuilderImpl(PolygonMainnetChainID, nil)
 
+	// 🛡️ [Anti-Cloudflare] 初始化 CycleTLS 客户端 (用于绕过 Cloudflare TLS 指纹检测)
+	cycleTLSClient := cycletls.Init()
+
 	return &ClobOrderClient{
-		privateKey:    privateKey,
-		address:       makerAddr,  // Maker 地址
-		signerAddress: signerAddr, // Signer 地址 (EOA)
-		apiAddress:    apiAddr,    // API 请求使用的地址
-		isProxyWallet: isProxy,    // 是否代理钱包
-		orderBuilder:  orderBuilder,
-		httpClient:    &http.Client{Timeout: 30 * time.Second},
-		chainID:       PolygonMainnetChainID,
+		privateKey:     privateKey,
+		address:        makerAddr,  // Maker 地址
+		signerAddress:  signerAddr, // Signer 地址 (EOA)
+		apiAddress:     apiAddr,    // API 请求使用的地址
+		isProxyWallet:  isProxy,    // 是否代理钱包
+		orderBuilder:   orderBuilder,
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		cycleTLSClient: cycleTLSClient,
+		chainID:        PolygonMainnetChainID,
 	}, nil
 }
 
@@ -369,7 +372,7 @@ func (c *ClobOrderClient) PlaceOrder(
 	return c.submitOrder(ctx, postOrderReq)
 }
 
-// submitOrder 提交订单到 CLOB API
+// submitOrder 提交订单到 CLOB API (使用 CycleTLS 绕过 Cloudflare)
 func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest) (*ClobOrderResult, error) {
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -378,12 +381,6 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 
 	// 🔍 DEBUG: 打印完整的请求payload
 	fmt.Printf("📤 [DEBUG] Order Payload:\n%s\n", string(jsonData))
-
-	// 创建 HTTP 请求
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", ClobHost+"/order", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
 
 	// 添加 L2 认证头 (使用 HMAC-SHA256 签名)
 	timestamp := time.Now().Unix()
@@ -394,54 +391,48 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 		return nil, fmt.Errorf("签名请求失败: %w", err)
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	// 🛡️ [Anti-bot] 添加浏览器伪装 Header 以绕过 Cloudflare WAF (EC2 必须)
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
-	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	httpReq.Header.Set("Origin", "https://polymarket.com")
-	httpReq.Header.Set("Referer", "https://polymarket.com/")
+	// 🛡️ [Anti-Cloudflare] 使用 CycleTLS 发送请求 (伪装 Chrome TLS 指纹)
+	// Chrome 120 JA3 指纹
+	chromeJA3 := "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513,29-23-24,0"
 
-	httpReq.Header.Set("POLY_ADDRESS", c.apiAddress.Hex()) // 使用 API EOA 地址，API Key 绑定在此
-	httpReq.Header.Set("POLY_SIGNATURE", signature)
-	httpReq.Header.Set("POLY_TIMESTAMP", strconv.FormatInt(timestamp, 10))
-	httpReq.Header.Set("POLY_API_KEY", c.credentials.APIKey)
-	httpReq.Header.Set("POLY_PASSPHRASE", c.credentials.Passphrase)
-
-	// 🔍 DEBUG: 打印认证头信息
-	//fmt.Printf("📋 [DEBUG] Auth Headers:\n")
-	//fmt.Printf("   POLY_ADDRESS: %s\n", c.apiAddress.Hex())
-	//fmt.Printf("   POLY_API_KEY: %s\n", c.credentials.APIKey)
-	//fmt.Printf("   POLY_PASSPHRASE: %s\n", c.credentials.Passphrase)
-	//fmt.Printf("   POLY_TIMESTAMP: %d\n", timestamp)
-	//fmt.Printf("   POLY_SIGNATURE: %s\n", signature)
-
-	// 发送请求
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.cycleTLSClient.Do(ClobHost+"/order", cycletls.Options{
+		Body:      string(jsonData),
+		Ja3:       chromeJA3,
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		Headers: map[string]string{
+			"Content-Type":    "application/json",
+			"Accept":          "application/json, text/plain, */*",
+			"Accept-Language": "en-US,en;q=0.9",
+			"Origin":          "https://polymarket.com",
+			"Referer":         "https://polymarket.com/",
+			"POLY_ADDRESS":    c.apiAddress.Hex(),
+			"POLY_SIGNATURE":  signature,
+			"POLY_TIMESTAMP":  strconv.FormatInt(timestamp, 10),
+			"POLY_API_KEY":    c.credentials.APIKey,
+			"POLY_PASSPHRASE": c.credentials.Passphrase,
+		},
+		Timeout: 30,
+	}, "POST")
 	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
+		return nil, fmt.Errorf("CycleTLS 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
-	}
+	body := resp.Body
 
 	// 🔍 DEBUG: 打印完整的响应
-	fmt.Printf("📥 [DEBUG] Response Status: %d\n📥 [DEBUG] Response Body: %s\n", resp.StatusCode, string(body))
+	fmt.Printf("📥 [DEBUG] Response Status: %d\n📥 [DEBUG] Response Body: %s\n", resp.Status, body)
 
 	// 解析响应
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.Status != http.StatusOK && resp.Status != http.StatusCreated {
 		return &ClobOrderResult{
 			Success:  false,
-			ErrorMsg: fmt.Sprintf("API 错误 (%d): %s", resp.StatusCode, string(body)),
+			ErrorMsg: fmt.Sprintf("API 错误 (%d): %s", resp.Status, body),
 		}, nil
 	}
 
 	var orderResp ClobOrderResponse
-	if err := json.Unmarshal(body, &orderResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w, body: %s", err, string(body))
+	if err := json.Unmarshal([]byte(body), &orderResp); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w, body: %s", err, body)
 	}
 
 	result := &ClobOrderResult{
