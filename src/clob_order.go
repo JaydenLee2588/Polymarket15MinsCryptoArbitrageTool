@@ -211,6 +211,11 @@ func (c *ClobOrderClient) GetAPIAddress() string {
 	return c.apiAddress.Hex()
 }
 
+// GetSignerAddress 返回签名者地址 (EOA)
+func (c *ClobOrderClient) GetSignerAddress() string {
+	return c.signerAddress.Hex()
+}
+
 // PlaceOrder 下单（核心函数）
 // tokenID: CTF Token ID
 // side: 买/卖方向

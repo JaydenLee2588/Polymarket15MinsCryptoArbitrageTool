@@ -55,6 +55,10 @@ var (
 	// 真实交易客户端
 	clobOrderClient *src.ClobOrderClient
 	clobClientMu    sync.Mutex
+
+	// 赎回服务
+	redeemer   *src.Redeemer
+	redeemerMu sync.Mutex
 )
 
 // StartSimulation 启动多配置模拟 (幂等)
@@ -162,6 +166,39 @@ func StartSimulation(configs []StrategyConfig) bool {
 		log.Printf("✅ 真实交易模式已启用")
 		log.Printf("   Maker 地址 (订单创建者): %s", client.GetAddress())
 		log.Printf("   API 请求地址: %s", client.GetAPIAddress())
+
+		// ========== 初始化赎回服务 ==========
+		rpcURL := os.Getenv("POLYGON_RPC_URL")
+		if rpcURL == "" {
+			rpcURL = "https://polygon-rpc.com" // 默认公共 RPC
+		}
+
+		// 获取 Builder API 凭证
+		builderKey := os.Getenv("BUILDER_KEY")
+		builderSecret := os.Getenv("BUILDER_SECRET")
+		builderPassphrase := os.Getenv("BUILDER_PASSPHRASE")
+
+		if builderKey == "" || builderSecret == "" || builderPassphrase == "" {
+			log.Printf("⚠️ Builder API 凭证未配置 (自动赎回将不可用)")
+		} else {
+			builderCreds := &src.BuilderCredentials{
+				Key:        builderKey,
+				Secret:     builderSecret,
+				Passphrase: builderPassphrase,
+			}
+
+			gammaDataClient := src.NewGammaClient(http.DefaultClient)
+			red, err := src.NewRedeemer(privateKey, makerAddress, rpcURL, gammaDataClient, builderCreds)
+			if err != nil {
+				log.Printf("⚠️ 创建赎回服务失败 (自动赎回将不可用): %v", err)
+			} else {
+				redeemerMu.Lock()
+				redeemer = red
+				redeemerMu.Unlock()
+				redeemer.Start()
+				log.Printf("✅ 赎回服务已启动 (决议后 %d 秒自动赎回)", src.RedemptionDelaySeconds)
+			}
+		}
 	}
 
 	isSimRunning = true
@@ -1031,6 +1068,41 @@ func checkPendingResolutions(client *src.Client, pending map[string]*MarketState
 		// 更新数据库
 		if err := database.UpdateTradeResolution(state.Leg1RecordID, resolution, pnl); err != nil {
 			log.Printf("❌ 更新决议失败: %v", err)
+		}
+
+		// ========== 计划自动赎回 (仅获胜方) ==========
+		redeemerMu.Lock()
+		red := redeemer
+		redeemerMu.Unlock()
+
+		if red != nil && resolution == state.Leg1Side {
+			// 获取 conditionId (从市场获取)
+			conditionID := market.ConditionID
+			winningTokenID := ""
+			for tid, side := range state.TokenIDToSide {
+				if side == resolution {
+					winningTokenID = tid
+					break
+				}
+			}
+
+			if conditionID != "" && winningTokenID != "" {
+				// 获取用户地址和代理钱包地址
+				clobClientMu.Lock()
+				signerAddr := ""
+				proxyAddr := ""
+				if clobOrderClient != nil {
+					signerAddr = clobOrderClient.GetSignerAddress()
+					proxyAddr = clobOrderClient.GetAddress()
+				}
+				clobClientMu.Unlock()
+
+				if signerAddr != "" && proxyAddr != "" {
+					// 15分钟加密货币市场通常不是 NegRisk 市场
+					isNegRisk := false
+					red.ScheduleRedemption(slug, conditionID, winningTokenID, signerAddr, proxyAddr, state.Leg1Amount, true, isNegRisk, state.ConfigGroup)
+				}
+			}
 		}
 
 		delete(pending, slug)
