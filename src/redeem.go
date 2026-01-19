@@ -673,10 +673,10 @@ func (r *Redeemer) addBuilderHeaders(req *http.Request, method, path string, bod
 	// 返回 URL-Safe Base64 编码 (与 clob_order.go 保持一致)
 	signature := base64.URLEncoding.EncodeToString(h.Sum(nil))
 
-	req.Header.Set("POLY_API_KEY", r.builderCreds.Key)
-	req.Header.Set("POLY_PASSPHRASE", r.builderCreds.Passphrase)
-	req.Header.Set("POLY_TIMESTAMP", timestamp)
-	req.Header.Set("POLY_SIGNATURE", signature)
+	req.Header.Set("POLY_BUILDER_API_KEY", r.builderCreds.Key)
+	req.Header.Set("POLY_BUILDER_PASSPHRASE", r.builderCreds.Passphrase)
+	req.Header.Set("POLY_BUILDER_TIMESTAMP", timestamp)
+	req.Header.Set("POLY_BUILDER_SIGNATURE", signature)
 }
 
 // TransactionStatus 交易状态响应
