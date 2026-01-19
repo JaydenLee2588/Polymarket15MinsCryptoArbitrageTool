@@ -649,14 +649,28 @@ func (r *Redeemer) addBuilderHeaders(req *http.Request, method, path string, bod
 	// HMAC-SHA256 签名: timestamp + method + path + body
 	message := timestamp + method + path + string(body)
 
-	// 解码 secret
-	secretBytes, err := base64.URLEncoding.DecodeString(r.builderCreds.Secret)
+	// 解码 secret (与 clob_order.go signL2HMAC 保持一致)
+	var secretBytes []byte
+	var err error
+
+	// 1. 优先 URLEncoding
+	secretBytes, err = base64.URLEncoding.DecodeString(r.builderCreds.Secret)
 	if err != nil {
-		secretBytes, _ = base64.StdEncoding.DecodeString(r.builderCreds.Secret)
+		// 2. 尝试 RawURLEncoding (无 padding)
+		secretBytes, err = base64.RawURLEncoding.DecodeString(r.builderCreds.Secret)
+		if err != nil {
+			// 3. 最后尝试 StdEncoding
+			secretBytes, err = base64.StdEncoding.DecodeString(r.builderCreds.Secret)
+			if err != nil {
+				log.Printf("⚠️ [赎回] 解码 Builder Secret 失败: %v", err)
+				return
+			}
+		}
 	}
 
 	h := hmac.New(sha256.New, secretBytes)
 	h.Write([]byte(message))
+	// 返回 URL-Safe Base64 编码 (与 clob_order.go 保持一致)
 	signature := base64.URLEncoding.EncodeToString(h.Sum(nil))
 
 	req.Header.Set("POLY_API_KEY", r.builderCreds.Key)
