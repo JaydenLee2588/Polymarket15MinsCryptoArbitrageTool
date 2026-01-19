@@ -812,13 +812,14 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	priceEdge := fairPrice - price
 
 	// 记录决策过程 (用于调试为什么没交易)
+	// 记录决策过程 (用于调试为什么没交易)
 	if priceEdge < config.MinPriceEdge {
 		// 如果有趋势但优势不足，每分钟记录一次
 		if time.Since(state.StartTime).Seconds() > 120 && int(time.Now().Unix())%30 == 0 {
-			log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: 公允价=%.3f, 现价=%.3f, 优势=%.3f (要求=%.2f)",
+			log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: 公允价=%.3f, 现价=%.3f, 优势=%.3f (要求=%.2f) - [强制执行:忽略优势检查]",
 				state.ConfigGroup, state.Slug, targetSide, trendPercent*100, fairPrice, price, priceEdge, config.MinPriceEdge)
 		}
-		return
+		// return // 用户要求: 移除优势检查，只要满足趋势就做
 	}
 
 	// 检查价格范围
