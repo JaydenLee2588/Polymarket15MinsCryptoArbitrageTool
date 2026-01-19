@@ -448,44 +448,31 @@ func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayload, error) {
 	return &payload, nil
 }
 
-// createStructHash 创建 EIP-712 结构哈希用于代理钱包交易签名
+// createStructHash 创建结构哈希用于代理钱包交易签名
+// 完全参照 poly-web3/signature/build.py create_struct_hash 实现
 func (r *Redeemer) createStructHash(from, to common.Address, data []byte, relayerFee, gasPrice, gasLimit string, nonce int, relayHub, relay common.Address) common.Hash {
-	// TypeHash for ForwardRequest
-	typeHash := crypto.Keccak256Hash([]byte("ForwardRequest(address from,address to,bytes data,uint256 relayerFee,uint256 gasPrice,uint256 gasLimit,uint256 nonce,address relayHub,address relay)"))
+	// 参照 poly-web3: relay_hub_prefix = to_bytes("rlx:")
+	relayHubPrefix := []byte("rlx:")
 
-	// 编码参数
-	dataHash := crypto.Keccak256Hash(data)
-
-	gasLimitBig, _ := new(big.Int).SetString(gasLimit, 10)
-	gasPriceBig, _ := new(big.Int).SetString(gasPrice, 10)
-	relayerFeeBig, _ := new(big.Int).SetString(relayerFee, 10)
-
-	// ABI 编码所有参数
-	args := []interface{}{
-		typeHash,
-		from,
-		to,
-		dataHash,
-		relayerFeeBig,
-		gasPriceBig,
-		gasLimitBig,
-		big.NewInt(int64(nonce)),
-		relayHub,
-		relay,
+	// 将数字字符串转为 32 字节大端序
+	toBytesUint256 := func(s string) []byte {
+		n := new(big.Int)
+		n.SetString(s, 10)
+		return common.LeftPadBytes(n.Bytes(), 32)
 	}
 
-	// 简化：使用 Keccak256 直接哈希
+	// 构建待哈希数据 (参照 poly-web3)
 	var buf bytes.Buffer
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case common.Hash:
-			buf.Write(v[:])
-		case common.Address:
-			buf.Write(common.LeftPadBytes(v[:], 32))
-		case *big.Int:
-			buf.Write(common.LeftPadBytes(v.Bytes(), 32))
-		}
-	}
+	buf.Write(relayHubPrefix)                      // "rlx:"
+	buf.Write(from.Bytes())                        // from address (20 bytes)
+	buf.Write(to.Bytes())                          // to address (20 bytes)
+	buf.Write(data)                                // data (variable length)
+	buf.Write(toBytesUint256(relayerFee))          // tx_fee (32 bytes)
+	buf.Write(toBytesUint256(gasPrice))            // gas_price (32 bytes)
+	buf.Write(toBytesUint256(gasLimit))            // gas_limit (32 bytes)
+	buf.Write(toBytesUint256(strconv.Itoa(nonce))) // nonce (32 bytes)
+	buf.Write(relayHub.Bytes())                    // relay_hub_address (20 bytes)
+	buf.Write(relay.Bytes())                       // relay_address (20 bytes)
 
 	return crypto.Keccak256Hash(buf.Bytes())
 }
