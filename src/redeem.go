@@ -300,7 +300,7 @@ func (r *Redeemer) processPendingRedemptions() {
 func (r *Redeemer) executeRedemption(pending *PendingRedemption) {
 	log.Printf("💰 [赎回] 正在执行: %s (ConditionID: %s)", pending.Slug, pending.ConditionID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	// 构建赎回交易数据
