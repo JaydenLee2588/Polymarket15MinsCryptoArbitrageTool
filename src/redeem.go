@@ -568,11 +568,14 @@ func (r *Redeemer) submitViaRelayer(ctx context.Context, to common.Address, call
 		return "", fmt.Errorf("签名失败: %w", err)
 	}
 
+	// 6. 派生 proxyWallet (参照 poly-web3: proxy = derive_proxy_wallet(from, to, PROXY_INIT_CODE_HASH))
+	derivedProxy := deriveProxyWallet(r.signerAddress, ProxyFactoryAddress, ProxyInitCodeHash)
+
 	// 6. 构建请求
 	submitReq := SubmitRequest{
 		From:        r.signerAddress.Hex(),
 		To:          ProxyFactoryAddress.Hex(),
-		ProxyWallet: r.proxyAddress.Hex(),
+		ProxyWallet: derivedProxy.Hex(), // 使用派生的地址，而非传入的地址
 		Data:        "0x" + hex.EncodeToString(proxyData),
 		Nonce:       relayPayload.Nonce,
 		Signature:   "0x" + hex.EncodeToString(signature),
@@ -592,6 +595,10 @@ func (r *Redeemer) submitViaRelayer(ctx context.Context, to common.Address, call
 	if err != nil {
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
+
+	// Debug: 打印请求内容
+	log.Printf("🔧 [赎回] 请求内容: from=%s, to=%s, proxyWallet=%s (派生), nonce=%d",
+		submitReq.From, submitReq.To, submitReq.ProxyWallet, submitReq.Nonce)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", RelayerURL+SubmitPath, bytes.NewReader(reqBody))
 	if err != nil {
