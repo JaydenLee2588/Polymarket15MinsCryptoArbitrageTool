@@ -416,12 +416,18 @@ func (r *Redeemer) encodeProxyTransaction(to common.Address, data []byte) ([]byt
 
 // RelayPayload Relayer API 返回的 payload
 type RelayPayload struct {
-	Address string `json:"address"`
-	Nonce   int    `json:"nonce"`
+	Address string      `json:"address"`
+	Nonce   json.Number `json:"nonce"`
+}
+
+// RelayPayloadResolved 解析后的 payload
+type RelayPayloadResolved struct {
+	Address string
+	Nonce   int
 }
 
 // getRelayPayload 获取 Relay 节点信息和 nonce
-func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayload, error) {
+func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayloadResolved, error) {
 	// type=PROXY (必须大写，参照 poly-web3)
 	url := fmt.Sprintf("%s%s?address=%s&type=PROXY", RelayerURL, RelayPayloadPath, r.signerAddress.Hex())
 
@@ -446,7 +452,15 @@ func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayload, error) {
 		return nil, fmt.Errorf("解析响应失败: %w, body: %s", err, string(body))
 	}
 
-	return &payload, nil
+	nonce, err := payload.Nonce.Int64()
+	if err != nil {
+		return nil, fmt.Errorf("无效的 nonce 格式: %w", err)
+	}
+
+	return &RelayPayloadResolved{
+		Address: payload.Address,
+		Nonce:   int(nonce),
+	}, nil
 }
 
 // ... (removed erroneous comments)
