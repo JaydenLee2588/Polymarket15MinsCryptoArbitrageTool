@@ -30,7 +30,7 @@ import (
 )
 
 // RedemptionDelaySeconds 是决议后等待赎回的延迟时间 (秒)
-const RedemptionDelaySeconds = 300 // 5分钟
+const RedemptionDelaySeconds = 600 // 10分钟
 
 // Builder Relayer API 常量
 const (
