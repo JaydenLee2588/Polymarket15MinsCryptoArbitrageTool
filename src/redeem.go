@@ -422,7 +422,8 @@ type RelayPayload struct {
 
 // getRelayPayload 获取 Relay 节点信息和 nonce
 func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayload, error) {
-	url := fmt.Sprintf("%s%s?address=%s&type=proxy", RelayerURL, RelayPayloadPath, r.signerAddress.Hex())
+	// type=PROXY (必须大写，参照 poly-web3)
+	url := fmt.Sprintf("%s%s?address=%s&type=PROXY", RelayerURL, RelayPayloadPath, r.signerAddress.Hex())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -447,6 +448,8 @@ func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayload, error) {
 
 	return &payload, nil
 }
+
+// ... (removed erroneous comments)
 
 // createStructHash 创建结构哈希用于代理钱包交易签名
 // 完全参照 poly-web3/signature/build.py create_struct_hash 实现
@@ -586,7 +589,7 @@ func (r *Redeemer) submitViaRelayer(ctx context.Context, to common.Address, call
 			"relayHub":   RelayHubAddress.Hex(),
 			"relay":      relayPayload.Address,
 		},
-		Type:     "proxy",
+		Type:     "PROXY", // 必须大写
 		Metadata: "redeem",
 	}
 
