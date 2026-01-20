@@ -536,7 +536,7 @@ type SubmitRequest struct {
 	To              string                 `json:"to"`
 	ProxyWallet     string                 `json:"proxyWallet"`
 	Data            string                 `json:"data"`
-	Nonce           int                    `json:"nonce"`
+	Nonce           string                 `json:"nonce"`
 	Signature       string                 `json:"signature"`
 	SignatureParams map[string]interface{} `json:"signatureParams"`
 	Type            string                 `json:"type"`
@@ -588,13 +588,14 @@ func (r *Redeemer) submitViaRelayer(ctx context.Context, to common.Address, call
 	// 6. 派生 proxyWallet (参照 poly-web3: proxy = derive_proxy_wallet(from, to, PROXY_INIT_CODE_HASH))
 	derivedProxy := deriveProxyWallet(r.signerAddress, ProxyFactoryAddress, ProxyInitCodeHash)
 
-	// 6. 构建请求
+	// 6. 构建请求 (nonce 必须是 string 格式)
+	nonceStr := strconv.Itoa(relayPayload.Nonce)
 	submitReq := SubmitRequest{
 		From:        r.signerAddress.Hex(),
 		To:          ProxyFactoryAddress.Hex(),
 		ProxyWallet: derivedProxy.Hex(), // 使用派生的地址，而非传入的地址
 		Data:        "0x" + hex.EncodeToString(proxyData),
-		Nonce:       relayPayload.Nonce,
+		Nonce:       nonceStr,
 		Signature:   "0x" + hex.EncodeToString(signature),
 		SignatureParams: map[string]interface{}{
 			"gasPrice":   "0",
@@ -614,7 +615,7 @@ func (r *Redeemer) submitViaRelayer(ctx context.Context, to common.Address, call
 	}
 
 	// Debug: 打印请求内容
-	log.Printf("🔧 [赎回] 请求内容: from=%s, to=%s, proxyWallet=%s (派生), nonce=%d",
+	log.Printf("🔧 [赎回] 请求内容: from=%s, to=%s, proxyWallet=%s (派生), nonce=%s",
 		submitReq.From, submitReq.To, submitReq.ProxyWallet, submitReq.Nonce)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", RelayerURL+SubmitPath, bytes.NewReader(reqBody))
