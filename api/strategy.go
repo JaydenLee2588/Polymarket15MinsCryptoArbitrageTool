@@ -472,12 +472,23 @@ func scanAndSubscribe(
 	}
 	simMu.Unlock()
 
-	// 订阅
+	// 订阅 - ⚠️ 关键修复: Polymarket 使用"覆盖性"订阅机制
+	// 每次发送订阅都会替换旧的，所以必须发送完整的 token 列表
 	if len(newTokenIDs) > 0 {
-		filter := &src.CLOBMarketFilter{TokenIDs: newTokenIDs}
+		// 构建完整的 token 列表（所有已知市场的所有 token）
+		simMu.Lock()
+		var allTokenIDs []string
+		for _, tokenMap := range sharedMarketTokens {
+			for tid := range tokenMap {
+				allTokenIDs = append(allTokenIDs, tid)
+			}
+		}
+		simMu.Unlock()
+
+		filter := &src.CLOBMarketFilter{TokenIDs: allTokenIDs}
 
 		if !handlersRegistered {
-			log.Printf("🔌 首次订阅 %d 个资产...", len(newTokenIDs))
+			log.Printf("🔌 首次订阅 %d 个资产...", len(allTokenIDs))
 
 			err := sdk.SubscribeToCLOBMarketLastTradePrice(filter, func(price src.LastTradePrice) error {
 				priceUpdateCountMu.Lock()
@@ -513,7 +524,8 @@ func scanAndSubscribe(
 
 			handlersRegistered = true
 		} else {
-			log.Printf("🔌 订阅 %d 个新资产", len(newTokenIDs))
+			// ⚠️ 发送完整列表，不是只发新的！
+			log.Printf("🔌 重新订阅全部 %d 个资产 (新增 %d 个)", len(allTokenIDs), len(newTokenIDs))
 			sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
 		}
 	}

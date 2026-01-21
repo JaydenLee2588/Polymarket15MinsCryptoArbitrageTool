@@ -35,9 +35,9 @@ func (p *realtimeProtocol) GetDefaultHost() string {
 }
 
 // FormatSubscription 将订阅格式化为 CLOB 协议消息格式
-// CLOB WebSocket 期望格式:
-// - 初始订阅: {"assets_ids": ["token_id_1", "token_id_2"], "type": "market"}
-// - 动态追加: {"assets_ids": ["token_id"], "operation": "subscribe"}
+// ⚠️ 重要: Polymarket 使用"覆盖性"订阅机制
+// 发送 {"type": "market", "assets_ids": ["A"]} 会清空旧订阅，只保留 A
+// 因此调用方必须每次发送完整的订阅列表！
 func (p *realtimeProtocol) FormatSubscription(subscriptions []Subscription) ([]byte, error) {
 	// 收集所有 token IDs
 	var allTokenIDs []string
@@ -58,22 +58,16 @@ func (p *realtimeProtocol) FormatSubscription(subscriptions []Subscription) ([]b
 		return nil, fmt.Errorf("没有可订阅的 token IDs")
 	}
 
-	// ⚠️ 关键修复：使用 operation: subscribe 进行动态订阅
-	// 参考: binary-jerry/polymarket-sdk ws_client.go
-	// - 初始连接使用 {"assets_ids": [...], "type": "market"}
-	// - 动态追加使用 {"assets_ids": [...], "operation": "subscribe"}
-	//
-	// 由于我们在 baseClient 中无法区分首次/后续订阅，
-	// 这里改为始终使用 "operation": "subscribe" 格式
-	// 因为 Polymarket 服务器对两种格式都能正确处理追加
-	type dynamicSubscriptionMessage struct {
+	// ⚠️ 使用 type: market 格式（服务器会用这个列表完全替换当前订阅）
+	// 调用方必须确保传入的是累积的完整列表，而不是增量！
+	type subscriptionMessage struct {
 		AssetsIDs []string `json:"assets_ids"`
-		Operation string   `json:"operation"`
+		Type      string   `json:"type"`
 	}
 
-	msg := dynamicSubscriptionMessage{
+	msg := subscriptionMessage{
 		AssetsIDs: allTokenIDs,
-		Operation: "subscribe",
+		Type:      "market",
 	}
 
 	return json.Marshal(msg)
