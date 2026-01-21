@@ -162,8 +162,19 @@ func (c *baseClient) connect() error {
 	headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	// headers.Add("Origin", "https://polymarket.com") // 移除 Origin，测试显示会导致 504 错误
 
-	conn, _, err := dialer.Dial(c.host, headers)
+	conn, resp, err := dialer.Dial(c.host, headers)
 	if err != nil {
+		if resp != nil {
+			c.logger.Error("❌ WebSocket Handshake 失败: Status=%s", resp.Status)
+			// 尝试读取 Response Body (便于诊断 Cloudflare 错误)
+			if resp.Body != nil {
+				defer resp.Body.Close()
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				if len(bodyBytes) > 0 {
+					c.logger.Error("❌ Error Body: %s", string(bodyBytes))
+				}
+			}
+		}
 		return err
 	}
 
