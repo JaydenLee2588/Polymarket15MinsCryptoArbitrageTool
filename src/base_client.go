@@ -160,7 +160,7 @@ func (c *baseClient) connect() error {
 	// 添加必要的 Header 以绕过 Cloudflare 或服务器限制
 	headers := http.Header{}
 	headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	headers.Add("Origin", "https://polymarket.com")
+	// headers.Add("Origin", "https://polymarket.com") // 移除 Origin，测试显示会导致 504 错误
 
 	conn, _, err := dialer.Dial(c.host, headers)
 	if err != nil {
