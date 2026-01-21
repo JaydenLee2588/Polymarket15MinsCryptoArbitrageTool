@@ -40,6 +40,12 @@ type BinanceKlineClient struct {
 	logger     Logger
 	timeOffset int64 // Binance 服务器时间与本地时间的偏差 (毫秒): Binance - Local
 	calibrated bool  // 是否已完成时间校准
+
+	// 僵死连接检测
+	lastMessageTime time.Time    // 最后收到消息的时间
+	lastMessageMu   sync.RWMutex // 保护 lastMessageTime
+	reconnecting    bool         // 是否正在重连中
+	reconnectMu     sync.Mutex   // 防止并发重连
 }
 
 // binanceStreamMsg 币安流式消息外层
@@ -164,10 +170,11 @@ func NewBinanceKlineClient(symbols []string, logger Logger) *BinanceKlineClient 
 		logger = NewSilentLogger()
 	}
 	return &BinanceKlineClient{
-		Klines:  make(map[string]*KlineData),
-		symbols: symbols,
-		done:    make(chan struct{}),
-		logger:  logger,
+		Klines:          make(map[string]*KlineData),
+		symbols:         symbols,
+		done:            make(chan struct{}),
+		logger:          logger,
+		lastMessageTime: time.Now(),
 	}
 }
 
@@ -203,8 +210,16 @@ func (c *BinanceKlineClient) Connect() error {
 	}
 	c.mu.Unlock()
 
+	// 初始化最后消息时间
+	c.lastMessageMu.Lock()
+	c.lastMessageTime = time.Now()
+	c.lastMessageMu.Unlock()
+
 	// 启动消息处理协程
 	go c.readLoop()
+
+	// 启动健康检查协程 (僵死连接检测)
+	go c.healthCheck()
 
 	return nil
 }
@@ -264,6 +279,11 @@ func (c *BinanceKlineClient) reconnect() error {
 
 // processMessage 处理收到的消息
 func (c *BinanceKlineClient) processMessage(msg []byte) {
+	// 更新最后收到消息的时间 (用于僵死连接检测)
+	c.lastMessageMu.Lock()
+	c.lastMessageTime = time.Now()
+	c.lastMessageMu.Unlock()
+
 	var streamMsg binanceStreamMsg
 	if err := json.Unmarshal(msg, &streamMsg); err != nil {
 		c.logger.Warn("⚠️ [Binance] JSON 解析失败: %v", err)
@@ -277,6 +297,69 @@ func (c *BinanceKlineClient) processMessage(msg []byte) {
 	}
 
 	c.updateKline(event.S, event.K)
+}
+
+// healthCheck 定期检查连接健康状态，如果长时间没有收到消息则触发重连
+func (c *BinanceKlineClient) healthCheck() {
+	const (
+		checkInterval  = 30 * time.Second // 检查间隔
+		staleThreshold = 60 * time.Second // 超过60秒没收到消息视为僵死
+		reconnectDelay = 3 * time.Second  // 重连前等待时间
+	)
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.lastMessageMu.RLock()
+			lastTime := c.lastMessageTime
+			c.lastMessageMu.RUnlock()
+
+			sinceLastMessage := time.Since(lastTime)
+
+			// 如果超过阈值时间没有收到消息，触发重连
+			if sinceLastMessage > staleThreshold {
+				c.logger.Warn("⚠️ [Binance] 连接僵死，%.0f秒未收到消息，正在触发重连...", sinceLastMessage.Seconds())
+
+				// 防止并发重连
+				c.reconnectMu.Lock()
+				if c.reconnecting {
+					c.reconnectMu.Unlock()
+					c.logger.Info("🔄 [Binance] 已有重连进行中，跳过")
+					continue
+				}
+				c.reconnecting = true
+				c.reconnectMu.Unlock()
+
+				// 关闭旧连接
+				if c.conn != nil {
+					c.conn.Close()
+				}
+
+				// 等待一下再重连
+				time.Sleep(reconnectDelay)
+
+				// 尝试重连
+				if err := c.reconnect(); err != nil {
+					c.logger.Error("❌ [Binance] 健康检查触发的重连失败: %v", err)
+				} else {
+					c.logger.Info("✅ [Binance] 健康检查触发的重连成功")
+					// 重置最后消息时间
+					c.lastMessageMu.Lock()
+					c.lastMessageTime = time.Now()
+					c.lastMessageMu.Unlock()
+				}
+
+				c.reconnectMu.Lock()
+				c.reconnecting = false
+				c.reconnectMu.Unlock()
+			}
+		}
+	}
 }
 
 // GetTrend 获取指定交易对的当前趋势
@@ -377,25 +460,24 @@ func SymbolToBinance(symbol string) string {
 	}
 }
 
-
 // SimpleKline 简化的K线数据结构
 type SimpleKline struct {
-Open  float64
-Close float64
-High  float64
-Low   float64
+	Open  float64
+	Close float64
+	High  float64
+	Low   float64
 }
 
 // GetLatestKline 获取指定交易对的最新 K 线数据
 func (c *BinanceKlineClient) GetLatestKline(symbol string) *SimpleKline {
-data, ok := c.GetTrend(symbol)
-if !ok || data == nil {
-return nil
-}
-return &SimpleKline{
-Open:  data.OpenPrice,
-Close: data.CurrentPrice,
-High:  data.HighPrice,
-Low:   data.LowPrice,
-}
+	data, ok := c.GetTrend(symbol)
+	if !ok || data == nil {
+		return nil
+	}
+	return &SimpleKline{
+		Open:  data.OpenPrice,
+		Close: data.CurrentPrice,
+		High:  data.HighPrice,
+		Low:   data.LowPrice,
+	}
 }
