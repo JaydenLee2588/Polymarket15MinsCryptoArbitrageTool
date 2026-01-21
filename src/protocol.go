@@ -35,8 +35,9 @@ func (p *realtimeProtocol) GetDefaultHost() string {
 }
 
 // FormatSubscription 将订阅格式化为 CLOB 协议消息格式
-// CLOB WebSocket 期望格式: {"assets_ids": ["token_id_1", "token_id_2"], "type": "market"}
-// 或追加订阅: {"assets_ids": ["token_id"], "operation": "subscribe"}
+// CLOB WebSocket 期望格式:
+// - 初始订阅: {"assets_ids": ["token_id_1", "token_id_2"], "type": "market"}
+// - 动态追加: {"assets_ids": ["token_id"], "operation": "subscribe"}
 func (p *realtimeProtocol) FormatSubscription(subscriptions []Subscription) ([]byte, error) {
 	// 收集所有 token IDs
 	var allTokenIDs []string
@@ -57,16 +58,22 @@ func (p *realtimeProtocol) FormatSubscription(subscriptions []Subscription) ([]b
 		return nil, fmt.Errorf("没有可订阅的 token IDs")
 	}
 
-	// 格式化为 CLOB 协议格式
-	// 参考: https://docs.polymarket.com/developers/CLOB/websocket/wss-overview
-	type clobSubscriptionMessage struct {
+	// ⚠️ 关键修复：使用 operation: subscribe 进行动态订阅
+	// 参考: binary-jerry/polymarket-sdk ws_client.go
+	// - 初始连接使用 {"assets_ids": [...], "type": "market"}
+	// - 动态追加使用 {"assets_ids": [...], "operation": "subscribe"}
+	//
+	// 由于我们在 baseClient 中无法区分首次/后续订阅，
+	// 这里改为始终使用 "operation": "subscribe" 格式
+	// 因为 Polymarket 服务器对两种格式都能正确处理追加
+	type dynamicSubscriptionMessage struct {
 		AssetsIDs []string `json:"assets_ids"`
-		Type      string   `json:"type"`
+		Operation string   `json:"operation"`
 	}
 
-	msg := clobSubscriptionMessage{
+	msg := dynamicSubscriptionMessage{
 		AssetsIDs: allTokenIDs,
-		Type:      "market",
+		Operation: "subscribe",
 	}
 
 	return json.Marshal(msg)

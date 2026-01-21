@@ -917,6 +917,10 @@ func (r *RealtimeMessageRouter) RouteMessage(data []byte) error {
 	case TopicClobMarket:
 		return r.routeCLOBMarketMessage(msg)
 	default:
+		// 静默忽略空主题消息（订阅确认或心跳）
+		if msg.Topic == "" {
+			return nil
+		}
 		return fmt.Errorf("未知主题: %s", msg.Topic)
 	}
 }

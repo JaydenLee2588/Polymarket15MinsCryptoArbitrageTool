@@ -3,12 +3,14 @@
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,21 +53,31 @@ type baseClient struct {
 	// 日志记录器
 	logger Logger
 
+	// 僵死连接检测
+	lastMessageTime time.Time
+	lastMessageMu   sync.RWMutex
+	lastPongTime    time.Time
+	lastPongMu      sync.RWMutex
+
 	// 内部状态
 	internal struct {
 		mu                sync.RWMutex
 		connClosed        bool
 		subscriptions     []Subscription
 		reconnectAttempts int
-		isReconnecting    bool
+		// 注意: isReconnecting 已移除，改用 reconnecting 原子标志
 	}
 
-	// 控制流通道
-	closeChan chan struct{}
-	closeOnce sync.Once
+	// ⭐ Goroutine 生命周期管理 (binary-jerry 模式)
+	loopWg       sync.WaitGroup // 等待所有 goroutine 退出
+	reconnecting int32          // CAS 原子标志，防止重复重连
 
-	writeLoopOnce sync.Once
-	writeChan     chan writeRequest // 序列化 WebSocket 写入的通道
+	// 控制流通道
+	closeChan   chan struct{}
+	closeChanMu sync.Mutex // 保护 closeChan 的互斥锁
+
+	writeLoopRunning int32             // 原子标志，0=停止，1=运行
+	writeChan        chan writeRequest // 序列化 WebSocket 写入的通道
 }
 
 // newBaseClient 使用给定的协议和选项创建一个新的基础客户端
@@ -116,6 +128,9 @@ func newBaseClient(protocol Protocol, opts ...ClientOption) *baseClient {
 
 // connect 建立 WebSocket 连接
 func (c *baseClient) connect() error {
+	// 确保旧的 goroutine 已退出
+	c.stopLoops()
+
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 
@@ -131,9 +146,8 @@ func (c *baseClient) connect() error {
 	}
 
 	// 检查是否正在重连 - 如果不是，这必须是一个新的连接
-	c.internal.mu.RLock()
-	isReconnecting := c.internal.isReconnecting
-	c.internal.mu.RUnlock()
+	// 检查是否正在重连 - 如果不是，这必须是一个新的连接
+	isReconnecting := atomic.LoadInt32(&c.reconnecting) == 1
 
 	// 如果没有重连且连接之前已关闭，则拒绝
 	if !isReconnecting {
@@ -187,15 +201,59 @@ func (c *baseClient) connect() error {
 
 	c.conn = conn
 
+	// ⚠️ 关键修复：设置 Pong Handler 和 Read Deadline（应对 Cloudflare 静默断开）
+	// Cloudflare 会在100秒空闲后静默切断连接，不发送任何通知
+	// 必须通过 ReadDeadline 让 ReadMessage() 在超时时返回错误
+	const pongWait = 65 * time.Second // 65秒超时（略大于健康检查的60秒阈值）
+
+	// 设置初始的读取超时
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// 设置 Pong Handler：收到 Pong 时重置超时（续命）
+	// 注意：使用 c.conn 而不是 conn，确保始终引用当前连接
+	c.conn.SetPongHandler(func(appData string) error {
+		c.logger.Debug("收到 Pong，重置读取超时")
+		c.connMu.RLock()
+		currentConn := c.conn
+		c.connMu.RUnlock()
+		if currentConn != nil {
+			currentConn.SetReadDeadline(time.Now().Add(pongWait))
+		}
+
+		// 更新 lastPongTime
+		c.lastPongMu.Lock()
+		c.lastPongTime = time.Now()
+		c.lastPongMu.Unlock()
+		return nil
+	})
+
 	// 重置连接状态
 	c.internal.mu.Lock()
 	c.internal.connClosed = false
 	c.internal.mu.Unlock()
 
-	// 启动 goroutine
+	// ⚠️ 关键修复：重置 closeChan 以允许 goroutine 在重连后正常运行
+	c.closeChanMu.Lock()
+	// 检查 closeChan 是否已关闭，如果是则重新创建
+	select {
+	case <-c.closeChan:
+		// 通道已关闭，重新创建
+		c.closeChan = make(chan struct{})
+		c.logger.Debug("重置 closeChan 用于新连接")
+	default:
+		// 通道仍然打开，保持原样
+	}
+	c.closeChanMu.Unlock()
+
+	// ⚠️ 清空旧的写入请求，防止重连后发送过期的订阅请求
+	c.drainWriteChan()
+
+	// 启动 goroutine (使用 WaitGroup 管理生命周期)
+	c.loopWg.Add(4)
 	go c.pingLoop()
 	go c.readMessages()
 	go c.writeLoop()
+	go c.healthCheck() // 僵死连接检测
 
 	// 调用连接回调
 	if c.onConnectCallback != nil {
@@ -231,10 +289,15 @@ func (c *baseClient) disconnect() error {
 
 	c.logger.Debug("正在断开与 %s 的连接", c.protocol.GetProtocolName())
 
-	// 关闭连接
-	c.closeOnce.Do(func() {
+	// 关闭 closeChan 以通知所有 goroutine 退出
+	c.closeChanMu.Lock()
+	select {
+	case <-c.closeChan:
+		// 已经关闭，不需要再次关闭
+	default:
 		close(c.closeChan)
-	})
+	}
+	c.closeChanMu.Unlock()
 
 	// 标记为已关闭
 	c.internal.mu.Lock()
@@ -391,14 +454,21 @@ func (c *baseClient) unsubscribe(subscriptions []Subscription) error {
 	return nil
 }
 
-// pingLoop 定期发送 pingLoop 消息以保持连接活跃
+// pingLoop 定期发送 PING 消息以保持连接活跃
+// 注意：Polymarket 使用应用层 "PING" 文本消息，而非 RFC 6455 协议层 Ping Frame
 func (c *baseClient) pingLoop() {
+	defer c.loopWg.Done()
 	ticker := time.NewTicker(c.pingInterval)
 	defer ticker.Stop()
 
+	// 安全获取 closeChan 引用
+	c.closeChanMu.Lock()
+	closeChan := c.closeChan
+	c.closeChanMu.Unlock()
+
 	for {
 		select {
-		case <-c.closeChan:
+		case <-closeChan:
 			c.logger.Debug("Ping 例程已停止")
 			return
 		case <-ticker.C:
@@ -417,75 +487,152 @@ func (c *baseClient) pingLoop() {
 			if isClosed {
 				return
 			}
-			c.ping()
+
+			// 发送应用层 PING 并检查结果
+			if err := c.sendPing(); err != nil {
+				c.logger.Warn("⚠️ PING 发送失败: %v，主动关闭连接触发重连", err)
+				// 关闭连接以触发 readLoop 报错和重连
+				c.connMu.RLock()
+				if c.conn != nil {
+					c.conn.Close()
+				}
+				c.connMu.RUnlock()
+				return
+			}
 		}
 	}
 }
 
-func (c *baseClient) ping() {
-	// 尝试所有这些以检查连接是否会异常关闭。
-	c.writeChan <- writeRequest{websocket.TextMessage, []byte("ping")}
-	c.writeChan <- writeRequest{websocket.PingMessage, []byte("ping")}
-	c.writeChan <- writeRequest{websocket.PingMessage, nil}
+// sendPing 发送应用层 PING 消息（Polymarket 特定）
+// 返回错误以便 pingLoop 检测连接状态
+func (c *baseClient) sendPing() error {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
 
-	// c.writeChan <- writeRequest{websocket.PongMessage, []byte("pong")}
+	if conn == nil {
+		return errors.New("连接为空")
+	}
 
-	// 服务器端不支持的数据
-	// c.writeChan <- writeRequest{websocket.BinaryMessage, []byte("pong")}
+	// 设置写入超时
+	conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 
-	// c.logger.Debug("Ping sent")
+	// ⚠️ 关键：使用应用层 "PING" 文本消息，而非协议层 Ping Frame
+	// Polymarket 服务器只响应文本 "PING"，不响应 RFC 6455 Ping
+	err := conn.WriteMessage(websocket.TextMessage, []byte("PING"))
+	if err != nil {
+		return fmt.Errorf("写入 PING 失败: %w", err)
+	}
+
+	return nil
+}
+
+// healthCheck 定期检查连接健康状态，如果长时间没有收到消息则触发重连
+func (c *baseClient) healthCheck() {
+	defer c.loopWg.Done()
+	const (
+		checkInterval  = 15 * time.Second // 检查间隔（从20s降到15s，更快检测问题）
+		staleThreshold = 30 * time.Second // ⭐ 从60s降到30s（参考 polybot 的 30 秒检查）
+	)
+
+	// 初始化最后消息时间
+	c.lastMessageMu.Lock()
+	c.lastMessageTime = time.Now()
+	c.lastMessageMu.Unlock()
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	// 安全获取 closeChan 引用
+	c.closeChanMu.Lock()
+	closeChan := c.closeChan
+	c.closeChanMu.Unlock()
+
+	for {
+		select {
+		case <-closeChan:
+			c.logger.Debug("健康检查例程已停止")
+			return
+		case <-ticker.C:
+			c.lastMessageMu.RLock()
+			lastTime := c.lastMessageTime
+			c.lastMessageMu.RUnlock()
+
+			sinceLastMessage := time.Since(lastTime)
+
+			// 如果超过阈值时间没有收到消息，触发重连
+			if sinceLastMessage > staleThreshold {
+				c.logger.Warn("⚠️ [健康检查] 连接僵死，%.0f秒未收到消息，正在触发重连... (Cloudflare空闲超时防护)", sinceLastMessage.Seconds())
+				c.tryAutoReconnect(errors.New("stale connection: no messages received"))
+				return
+			}
+		}
+	}
 }
 
 // writeLoop 通过通道序列化所有 WebSocket 写入
+// ⚠️ 已修复：移除 sync.Once，使用原子标志以支持重连后重启
 func (c *baseClient) writeLoop() {
-	c.writeLoopOnce.Do(func() {
-		defer func() {
-			c.logger.Debug("写入循环已停止")
-		}()
+	// 使用 CAS 防止多个 writeLoop 并发运行
+	if !atomic.CompareAndSwapInt32(&c.writeLoopRunning, 0, 1) {
+		c.logger.Debug("writeLoop 已在运行，跳过")
+		return
+	}
 
-		for {
-			select {
-			case <-c.closeChan:
-				return
-			case req := <-c.writeChan:
-				c.connMu.RLock()
-				conn := c.conn
-				c.connMu.RUnlock()
+	defer func() {
+		atomic.StoreInt32(&c.writeLoopRunning, 0)
+		c.logger.Debug("写入循环已停止")
+		c.loopWg.Done()
+	}()
 
-				if conn == nil {
-					c.logger.Debug("跳过写入，连接为 nil")
-					continue
-				}
+	// 获取当前的 closeChan 引用
+	c.closeChanMu.Lock()
+	closeChan := c.closeChan
+	c.closeChanMu.Unlock()
 
-				c.internal.mu.RLock()
-				isClosed := c.internal.connClosed
-				c.internal.mu.RUnlock()
+	for {
+		select {
+		case <-closeChan:
+			return
+		case req := <-c.writeChan:
+			c.connMu.RLock()
+			conn := c.conn
+			c.connMu.RUnlock()
 
-				if isClosed {
-					c.logger.Debug("跳过写入，连接已关闭")
-					continue
-				}
+			if conn == nil {
+				c.logger.Debug("跳过写入，连接为 nil")
+				continue
+			}
 
-				c.logger.Debug("写入消息 %v: %v", req.messageType, string(req.data))
+			c.internal.mu.RLock()
+			isClosed := c.internal.connClosed
+			c.internal.mu.RUnlock()
 
-				conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
-				err := conn.WriteMessage(req.messageType, req.data)
-				if err != nil {
-					c.logger.Error("写入消息错误 (类型=%d): %v", req.messageType, err)
-					// 检查是否为可恢复的连接错误
-					if c.isRecoverableError(err) {
-						c.logger.Info("写入错误可恢复，触发重连")
-						c.tryAutoReconnect(err)
-						return
-					}
+			if isClosed {
+				c.logger.Debug("跳过写入，连接已关闭")
+				continue
+			}
+
+			c.logger.Debug("写入消息 %v: %v", req.messageType, string(req.data))
+
+			conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+			err := conn.WriteMessage(req.messageType, req.data)
+			if err != nil {
+				c.logger.Error("写入消息错误 (类型=%d): %v", req.messageType, err)
+				// 检查是否为可恢复的连接错误
+				if c.isRecoverableError(err) {
+					c.logger.Info("写入错误可恢复，触发重连")
+					c.tryAutoReconnect(err)
+					return
 				}
 			}
 		}
-	})
+	}
 }
 
 // readMessages 从 WebSocket 连接读取消息
 func (c *baseClient) readMessages() {
+	defer c.loopWg.Done()
 	defer func() {
 		c.logger.Debug("读取消息例程已停止")
 	}()
@@ -510,13 +657,13 @@ func (c *baseClient) readMessages() {
 		}
 
 		// 读取消息
-
-		conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+		// 注意：ReadDeadline 已在 connect() 中通过 PongHandler 设置（65秒超时）
+		// 不再在这里设置，避免覆盖 Pong 机制
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				c.logger.Warn("读取消息超时")
+				c.logger.Warn("读取消息超时（可能 Cloudflare 静默断开）")
 			} else {
 				c.logger.Error("读取消息错误: %v", err)
 			}
@@ -527,11 +674,20 @@ func (c *baseClient) readMessages() {
 			return
 		}
 
+		// ⚠️ 关键：收到任何消息都续命（重置读取超时）
+		const pongWait = 65 * time.Second
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+
 		c.logger.Debug("收到原始消息 (长度=%d,类型=%v): %s", len(message), messageType, string(message))
 
 		// 处理不同的消息类型
 		switch messageType {
 		case websocket.TextMessage:
+			// 更新最后消息时间
+			c.lastMessageMu.Lock()
+			c.lastMessageTime = time.Now()
+			c.lastMessageMu.Unlock()
+
 			// 跳过空消息
 			if len(message) == 0 {
 				c.logger.Debug("收到空消息，跳过")
@@ -553,17 +709,26 @@ func (c *baseClient) readMessages() {
 
 			// c.logger.Debug("Received valid message (len=%d): %s", len(message), msgStr)
 
-			// 调用消息回调
+			// 调用消息回调（异步执行，防止阻塞 read loop）
 			if c.onNewMessage != nil {
-				c.onNewMessage(message)
+				msgCopy := make([]byte, len(message))
+				copy(msgCopy, message)
+				go c.onNewMessage(msgCopy)
 			}
 
 		case websocket.BinaryMessage:
+			// 更新最后消息时间
+			c.lastMessageMu.Lock()
+			c.lastMessageTime = time.Now()
+			c.lastMessageMu.Unlock()
+
 			c.logger.Debug("收到二进制消息 (长度: %d)", len(message))
 
-			// 调用消息回调
+			// 调用消息回调（异步执行，防止阻塞 read loop）
 			if c.onNewMessage != nil {
-				c.onNewMessage(message)
+				msgCopy := make([]byte, len(message))
+				copy(msgCopy, message)
+				go c.onNewMessage(msgCopy)
 			}
 
 		case websocket.PingMessage:
@@ -571,6 +736,10 @@ func (c *baseClient) readMessages() {
 
 		case websocket.PongMessage:
 			c.logger.Debug("收到 pong")
+			// 更新最后 pong 时间
+			c.lastPongMu.Lock()
+			c.lastPongTime = time.Now()
+			c.lastPongMu.Unlock()
 
 		case websocket.CloseMessage:
 			c.logger.Info("收到服务器关闭消息")
@@ -676,17 +845,15 @@ func (c *baseClient) isRecoverableError(err error) bool {
 
 // reconnect 尝试以指数回退方式重连到 WebSocket 服务器
 func (c *baseClient) reconnect() {
-	c.internal.mu.Lock()
-
-	// 检查是否并未重连
-	if c.internal.isReconnecting {
+	// 使用 CAS 原子操作检查并设置重连状态
+	if !atomic.CompareAndSwapInt32(&c.reconnecting, 0, 1) {
 		c.logger.Debug("重连已在进行中，跳过重复尝试")
-		c.internal.mu.Unlock()
 		return
 	}
+	// 确保在函数退出时重置重连状态
+	defer atomic.StoreInt32(&c.reconnecting, 0)
 
-	// 标记为正在重连
-	c.internal.isReconnecting = true
+	c.internal.mu.Lock()
 	c.internal.reconnectAttempts = 0
 	c.internal.mu.Unlock()
 
@@ -707,9 +874,7 @@ func (c *baseClient) reconnect() {
 			c.internal.mu.RUnlock()
 
 			c.logger.Info("自动重连已禁用，停止重连尝试")
-			c.internal.mu.Lock()
-			c.internal.isReconnecting = false
-			c.internal.mu.Unlock()
+			// 状态由 defer atomic.StoreInt32(&c.reconnecting, 0) 重置
 
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -719,9 +884,7 @@ func (c *baseClient) reconnect() {
 		if c.maxReconnectAttempts > 0 && c.internal.reconnectAttempts >= c.maxReconnectAttempts {
 			c.internal.mu.RUnlock()
 			c.logger.Error("达到最大重连尝试次数 (%d)，放弃", c.maxReconnectAttempts)
-			c.internal.mu.Lock()
-			c.internal.isReconnecting = false
-			c.internal.mu.Unlock()
+			// 状态由 defer atomic.StoreInt32(&c.reconnecting, 0) 重置
 			return
 		}
 		c.internal.mu.RUnlock()
@@ -770,7 +933,6 @@ func (c *baseClient) reconnect() {
 
 		// 重置重连状态
 		c.internal.mu.Lock()
-		c.internal.isReconnecting = false
 		c.internal.reconnectAttempts = 0
 		c.internal.connClosed = false
 		c.internal.mu.Unlock()
@@ -824,4 +986,25 @@ func subscriptionsToJSON(subscriptions []Subscription) ([]byte, error) {
 	}
 
 	return json.Marshal(msg)
+}
+
+// drainWriteChan 清空写入通道中的旧消息
+func (c *baseClient) drainWriteChan() {
+	count := 0
+	for {
+		select {
+		case <-c.writeChan:
+			count++
+		default:
+			if count > 0 {
+				c.logger.Debug("已丢弃 %d 条旧的写入请求", count)
+			}
+			return
+		}
+	}
+}
+
+// stopLoops 等待所有 goroutine 退出
+func (c *baseClient) stopLoops() {
+	c.loopWg.Wait()
 }

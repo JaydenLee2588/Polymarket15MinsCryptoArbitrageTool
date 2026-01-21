@@ -319,6 +319,29 @@ func runSimulationLoop(configs []StrategyConfig) {
 				}
 			}
 
+			// 清理 90 分钟前的旧市场（防止内存累积）
+			cleanupThreshold := 90 * time.Minute
+			now := time.Now()
+			for configID, pending := range allPendingResolutions {
+				for slug := range pending {
+					// 解析市场时间戳
+					parts := strings.Split(slug, "-")
+					if len(parts) >= 4 {
+						ts, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+						if err == nil {
+							marketTime := time.Unix(ts, 0)
+							age := now.Sub(marketTime)
+
+							// 如果市场超过 90 分钟，清理
+							if age > cleanupThreshold {
+								log.Printf("🧹 [%s] 清理旧市场: %s (已存在 %.0f 分钟)", configID, slug, age.Minutes())
+								delete(pending, slug)
+							}
+						}
+					}
+				}
+			}
+
 		case <-heartbeatTicker.C:
 			simMu.Lock()
 			totalActive := 0

@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	defaultPingInterval         = 5 * time.Second
+	defaultPingInterval         = 10 * time.Second
 	defaultAutoReconnect        = true
 	defaultMaxReconnectAttempts = 10 // 0 means infinite retries
 	defaultReconnectBackoffInit = 1 * time.Second
