@@ -27,6 +27,7 @@ type Config struct {
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
 	ProxyURL             *url.URL // 可选的 HTTP/HTTPS 代理 URL
+	UseTLS               bool     // 是否使用 uTLS 模拟 Chrome 浏览器 TLS 指纹
 
 	OnConnectCallback    func()
 	OnNewMessage         func([]byte)
@@ -137,6 +138,20 @@ func WithProxyURL(proxyURL *url.URL) ClientOption {
 	}
 }
 
+// WithUseTLS 启用 uTLS 来模拟 Chrome 浏览器 TLS 指纹
+// 这有助于绕过 Cloudflare 的 TLS 指纹检测
+//
+// 示例:
+//
+//	client := FKGoPolyTools.New(
+//		FKGoPolyTools.WithUseTLS(true),
+//	)
+func WithUseTLS(enabled bool) ClientOption {
+	return func(c *Config) {
+		c.UseTLS = enabled
+	}
+}
+
 // MessageRouter 定义将消息路由到处理程序的接口
 type MessageRouter interface {
 	RouteMessage(data []byte) error
@@ -175,4 +190,3 @@ func withRouter(router MessageRouter) ClientOption {
 		}
 	}
 }
-

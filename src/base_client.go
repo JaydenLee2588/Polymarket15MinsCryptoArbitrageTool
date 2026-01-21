@@ -40,6 +40,7 @@ type baseClient struct {
 	readTimeout          time.Duration
 	writeTimeout         time.Duration
 	proxyURL             *url.URL // 可选的 HTTP/HTTPS 代理 URL
+	useTLS               bool     // 是否使用 uTLS 模拟 Chrome TLS 指纹
 
 	// 回调
 	onConnectCallback    func()
@@ -102,6 +103,7 @@ func newBaseClient(protocol Protocol, opts ...ClientOption) *baseClient {
 		readTimeout:          config.ReadTimeout,
 		writeTimeout:         config.WriteTimeout,
 		proxyURL:             config.ProxyURL,
+		useTLS:               config.UseTLS,
 
 		onConnectCallback:    config.OnConnectCallback,
 		onNewMessage:         config.OnNewMessage,
@@ -147,14 +149,19 @@ func (c *baseClient) connect() error {
 	c.logger.Debug("正在连接到 %s (%s)", c.host, c.protocol.GetProtocolName())
 
 	// 建立 WebSocket 连接
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
-
-	// 配置代理（如果提供）
-	if c.proxyURL != nil {
-		dialer.Proxy = http.ProxyURL(c.proxyURL)
-		c.logger.Debug("使用代理: %s", c.proxyURL.String())
+	var dialer websocket.Dialer
+	if c.useTLS {
+		c.logger.Debug("使用 uTLS Chrome 指纹模式")
+		dialer = createUTLSWebSocketDialer(c.proxyURL)
+	} else {
+		dialer = websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+		}
+		// 配置代理（如果提供）
+		if c.proxyURL != nil {
+			dialer.Proxy = http.ProxyURL(c.proxyURL)
+			c.logger.Debug("使用代理: %s", c.proxyURL.String())
+		}
 	}
 
 	// 添加必要的 Header 以绕过 Cloudflare 或服务器限制
@@ -344,9 +351,9 @@ func (c *baseClient) unsubscribe(subscriptions []Subscription) error {
 	messageStr := string(unsubMessage)
 	if strings.Contains(messageStr, `"action":"subscribe"`) {
 		messageStr = strings.Replace(messageStr, `"action":"subscribe"`, `"action":"unsubscribe"`, 1)
-	} else if strings.Contains(messageStr, `"type":"MARKET"`) {
-		// CLOB 协议使用不同的格式
-		messageStr = strings.Replace(messageStr, `"type":"MARKET"`, `"type":"UNSUBSCRIBE"`, 1)
+	} else if strings.Contains(messageStr, `"type":"market"`) {
+		// CLOB 协议: {"assets_ids": [...], "type": "market"} -> {"assets_ids": [...], "operation": "unsubscribe"}
+		messageStr = strings.Replace(messageStr, `"type":"market"`, `"operation":"unsubscribe"`, 1)
 	}
 	unsubMessage = []byte(messageStr)
 

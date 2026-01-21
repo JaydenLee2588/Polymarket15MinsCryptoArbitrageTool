@@ -223,8 +223,11 @@ func StartSimulation(configs []StrategyConfig) bool {
 
 // runSimulationLoop 模拟循环
 func runSimulationLoop(configs []StrategyConfig) {
-	// 1. 初始化 Polymarket WebSocket
-	sdk := src.New(src.WithLogger(src.NewSilentLogger()))
+	// 1. 初始化 Polymarket WebSocket (启用 uTLS Chrome 指纹模拟以绕过 Cloudflare)
+	sdk := src.New(
+		src.WithLogger(src.NewSilentLogger()),
+		src.WithUseTLS(true), // 启用 uTLS 模拟 Chrome TLS 指纹
+	)
 
 	if err := sdk.Connect(); err != nil {
 		log.Printf("❌ Polymarket WS 连接错误: %v", err)
@@ -503,12 +506,10 @@ func scanNewMarkets(
 			EventsStatus: "active",
 		})
 		if err != nil {
-			log.Printf("⚠️ %s 搜索失败: %v", target, err)
 			continue
 		}
 
 		if len(resp.Events) == 0 {
-			log.Printf("⚠️ %s 搜索无结果 (query: %s)", target, searchQuery)
 			continue
 		}
 
@@ -631,7 +632,8 @@ func scanNewMarkets(
 
 		// 如果搜索没找到，尝试直接构造当前窗口的 slug
 		if foundForTarget == 0 {
-			currentWindow := now.Truncate(15 * time.Minute)
+			// ⚠️ 重要：使用UTC时间，因为Polymarket的时间戳是UTC
+			currentWindow := now.UTC().Truncate(15 * time.Minute)
 			timestamp := currentWindow.Unix()
 
 			var prefix string

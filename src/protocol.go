@@ -34,16 +34,39 @@ func (p *realtimeProtocol) GetDefaultHost() string {
 	return WebSocketURL
 }
 
-// FormatSubscription 将订阅格式化为实时协议消息格式
+// FormatSubscription 将订阅格式化为 CLOB 协议消息格式
+// CLOB WebSocket 期望格式: {"assets_ids": ["token_id_1", "token_id_2"], "type": "market"}
+// 或追加订阅: {"assets_ids": ["token_id"], "operation": "subscribe"}
 func (p *realtimeProtocol) FormatSubscription(subscriptions []Subscription) ([]byte, error) {
-	type subscriptionMessage struct {
-		Action        string         `json:"action"`
-		Subscriptions []Subscription `json:"subscriptions"`
+	// 收集所有 token IDs
+	var allTokenIDs []string
+
+	for _, sub := range subscriptions {
+		// 从 Filters 字段解析 token IDs
+		// Filters 是 JSON 格式的字符串数组，如 ["token_id_1", "token_id_2"]
+		if sub.Filters != "" {
+			var tokenIDs []string
+			if err := json.Unmarshal([]byte(sub.Filters), &tokenIDs); err == nil {
+				allTokenIDs = append(allTokenIDs, tokenIDs...)
+			}
+		}
 	}
 
-	msg := subscriptionMessage{
-		Action:        "subscribe",
-		Subscriptions: subscriptions,
+	// 如果没有 token IDs，返回空消息
+	if len(allTokenIDs) == 0 {
+		return nil, fmt.Errorf("没有可订阅的 token IDs")
+	}
+
+	// 格式化为 CLOB 协议格式
+	// 参考: https://docs.polymarket.com/developers/CLOB/websocket/wss-overview
+	type clobSubscriptionMessage struct {
+		AssetsIDs []string `json:"assets_ids"`
+		Type      string   `json:"type"`
+	}
+
+	msg := clobSubscriptionMessage{
+		AssetsIDs: allTokenIDs,
+		Type:      "market",
 	}
 
 	return json.Marshal(msg)
@@ -63,4 +86,3 @@ func (p *realtimeProtocol) ParseMessage(data []byte) (*Message, error) {
 func (p *realtimeProtocol) GetProtocolName() string {
 	return "实时数据"
 }
-
