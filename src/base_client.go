@@ -78,6 +78,9 @@ type baseClient struct {
 
 	writeLoopRunning int32             // 原子标志，0=停止，1=运行
 	writeChan        chan writeRequest // 序列化 WebSocket 写入的通道
+
+	// 消息处理通道 (读写分离)
+	msgChan chan []byte
 }
 
 // newBaseClient 使用给定的协议和选项创建一个新的基础客户端
@@ -105,6 +108,7 @@ func newBaseClient(protocol Protocol, opts ...ClientOption) *baseClient {
 		protocol:             protocol,
 		closeChan:            make(chan struct{}),
 		writeChan:            make(chan writeRequest, 100), // 写入缓冲通道
+		msgChan:              make(chan []byte, 10000),     // ⭐ 消息缓冲通道 (10000容量，防止阻塞读协程)
 		host:                 config.Host,
 		logger:               config.Logger,
 		pingInterval:         config.PingInterval,
@@ -247,13 +251,16 @@ func (c *baseClient) connect() error {
 
 	// ⚠️ 清空旧的写入请求，防止重连后发送过期的订阅请求
 	c.drainWriteChan()
+	// 清空消息通道
+	c.drainMsgChan()
 
 	// 启动 goroutine (使用 WaitGroup 管理生命周期)
-	c.loopWg.Add(4)
+	c.loopWg.Add(5) // ⚠️ 增加到5个 (ping, read, write, health, process)
 	go c.pingLoop()
 	go c.readMessages()
 	go c.writeLoop()
 	go c.healthCheck() // 僵死连接检测
+	go c.processLoop() // 消息处理循环
 
 	// 调用连接回调
 	if c.onConnectCallback != nil {
@@ -263,6 +270,42 @@ func (c *baseClient) connect() error {
 	c.logger.Info("成功连接到 %s", c.protocol.GetProtocolName())
 
 	return nil
+}
+
+// drainMsgChan 清空消息通道
+func (c *baseClient) drainMsgChan() {
+	for {
+		select {
+		case <-c.msgChan:
+		default:
+			return
+		}
+	}
+}
+
+// processLoop 串行处理接收到的消息
+func (c *baseClient) processLoop() {
+	defer c.loopWg.Done()
+
+	// 安全获取 closeChan 引用
+	c.closeChanMu.Lock()
+	closeChan := c.closeChan
+	c.closeChanMu.Unlock()
+
+	c.logger.Debug("消息处理循环已启动")
+
+	for {
+		select {
+		case <-closeChan:
+			c.logger.Debug("消息处理循环已停止")
+			return
+		case msg := <-c.msgChan:
+			// 调用消息回调
+			if c.onNewMessage != nil {
+				c.onNewMessage(msg)
+			}
+		}
+	}
 }
 
 // disconnect 关闭 WebSocket 连接
@@ -709,11 +752,17 @@ func (c *baseClient) readMessages() {
 
 			// c.logger.Debug("Received valid message (len=%d): %s", len(message), msgStr)
 
-			// 调用消息回调（异步执行，防止阻塞 read loop）
-			if c.onNewMessage != nil {
-				msgCopy := make([]byte, len(message))
-				copy(msgCopy, message)
-				go c.onNewMessage(msgCopy)
+			// 发送到缓冲通道，等待处理
+			// ⚠️ 复制 buffer，因为 gorilla/websocket 重用 buffer
+			msgCopy := make([]byte, len(message))
+			copy(msgCopy, message)
+
+			select {
+			case c.msgChan <- msgCopy:
+				// 成功放入队列
+			default:
+				// 通道已满，选择丢弃最新消息以避免阻塞 Read Loop
+				c.logger.Warn("⚠️ 消息处理队列已满 (10000)! 丢弃最新消息以保护读取循环")
 			}
 
 		case websocket.BinaryMessage:
@@ -724,11 +773,17 @@ func (c *baseClient) readMessages() {
 
 			c.logger.Debug("收到二进制消息 (长度: %d)", len(message))
 
-			// 调用消息回调（异步执行，防止阻塞 read loop）
-			if c.onNewMessage != nil {
-				msgCopy := make([]byte, len(message))
-				copy(msgCopy, message)
-				go c.onNewMessage(msgCopy)
+			// 发送到缓冲通道，等待处理
+			// ⚠️ 复制 buffer，因为 gorilla/websocket 重用 buffer
+			msgCopy := make([]byte, len(message))
+			copy(msgCopy, message)
+
+			select {
+			case c.msgChan <- msgCopy:
+				// 成功放入队列
+			default:
+				// 通道已满，选择丢弃最新消息以避免阻塞 Read Loop
+				c.logger.Warn("⚠️ 消息处理队列已满 (10000)! 丢弃最新消息以保护读取循环")
 			}
 
 		case websocket.PingMessage:
