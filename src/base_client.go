@@ -157,7 +157,12 @@ func (c *baseClient) connect() error {
 		c.logger.Debug("使用代理: %s", c.proxyURL.String())
 	}
 
-	conn, _, err := dialer.Dial(c.host, nil)
+	// 添加必要的 Header 以绕过 Cloudflare 或服务器限制
+	headers := http.Header{}
+	headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	headers.Add("Origin", "https://polymarket.com")
+
+	conn, _, err := dialer.Dial(c.host, headers)
 	if err != nil {
 		return err
 	}
@@ -802,4 +807,3 @@ func subscriptionsToJSON(subscriptions []Subscription) ([]byte, error) {
 
 	return json.Marshal(msg)
 }
-
