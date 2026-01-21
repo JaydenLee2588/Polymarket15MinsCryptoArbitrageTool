@@ -153,8 +153,9 @@ func (c *baseClient) connect() error {
 	// 检查是否正在重连 - 如果不是，这必须是一个新的连接
 	isReconnecting := atomic.LoadInt32(&c.reconnecting) == 1
 
-	// 如果没有重连且连接之前已关闭，则拒绝
-	if !isReconnecting {
+	// 如果没有重连、autoReconnect 被禁用、且连接之前已关闭，则拒绝
+	// ⚠️ 修复：ForceReconnect 会保留 autoReconnect=true，所以可以正常重连
+	if !isReconnecting && !c.autoReconnect {
 		c.internal.mu.RLock()
 		wasClosed := c.internal.connClosed
 		c.internal.mu.RUnlock()
@@ -357,6 +358,62 @@ func (c *baseClient) disconnect() error {
 	}
 
 	c.logger.Info("成功断开与 %s 的连接", c.protocol.GetProtocolName())
+
+	return nil
+}
+
+// forceDisconnect 强制断开连接，但不修改 autoReconnect 设置
+// 用于应用层看门狗强制重连场景
+func (c *baseClient) forceDisconnect() error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+
+	// ⚠️ 注意：这里故意不设置 autoReconnect = false
+	// 因为这是用于看门狗强制重连，需要保留重连能力
+
+	if c.conn == nil {
+		return errors.New("未连接")
+	}
+
+	c.internal.mu.RLock()
+	isClosed := c.internal.connClosed
+	c.internal.mu.RUnlock()
+
+	if isClosed {
+		return errors.New("连接已关闭")
+	}
+
+	c.logger.Debug("正在强制断开与 %s 的连接 (保留 autoReconnect)", c.protocol.GetProtocolName())
+
+	// 关闭 closeChan 以通知所有 goroutine 退出
+	c.closeChanMu.Lock()
+	select {
+	case <-c.closeChan:
+		// 已经关闭，不需要再次关闭
+	default:
+		close(c.closeChan)
+	}
+	c.closeChanMu.Unlock()
+
+	// 标记为已关闭
+	c.internal.mu.Lock()
+	c.internal.connClosed = true
+	c.internal.mu.Unlock()
+
+	// 发送关闭消息 (非阻塞，防止 writeChan 已满)
+	select {
+	case c.writeChan <- writeRequest{websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")}:
+	default:
+		c.logger.Debug("writeChan 已满，跳过发送关闭消息")
+	}
+
+	// 关闭连接
+	err := c.conn.Close()
+	if err != nil {
+		return err
+	}
+
+	c.logger.Info("已强制断开与 %s 的连接", c.protocol.GetProtocolName())
 
 	return nil
 }
@@ -963,6 +1020,13 @@ func (c *baseClient) reconnect() {
 		c.logger.Debug("正在尝试建立连接...")
 		err := c.connect()
 		if err != nil {
+			// ⚠️ 如果错误是"已连接"，说明其他地方已经成功重连了，直接退出
+			errMsg := err.Error()
+			if errMsg == "已连接" {
+				c.logger.Info("✓ 连接已由其他途径恢复，退出重连循环")
+				return
+			}
+
 			// 指数增加回退
 			nextBackoff := backoff * 2
 			if nextBackoff > c.reconnectBackoffMax {
@@ -1059,7 +1123,19 @@ func (c *baseClient) drainWriteChan() {
 	}
 }
 
-// stopLoops 等待所有 goroutine 退出
+// stopLoops 等待所有 goroutine 退出 (带超时保护)
 func (c *baseClient) stopLoops() {
-	c.loopWg.Wait()
+	// 使用 channel + goroutine 实现带超时的 Wait
+	done := make(chan struct{})
+	go func() {
+		c.loopWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		c.logger.Debug("所有 goroutine 已正常退出")
+	case <-time.After(5 * time.Second):
+		c.logger.Warn("⚠️ 等待 goroutine 退出超时 (5秒)，强制继续")
+	}
 }

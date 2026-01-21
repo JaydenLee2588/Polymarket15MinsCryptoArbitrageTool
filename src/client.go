@@ -2,10 +2,12 @@
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 // Client 是 Gamma API 的客户端（用于查询事件和市场元数据）
@@ -144,17 +146,31 @@ func (c *WsClientWrapper) Unsubscribe(subscriptions []Subscription) error {
 	return c.baseClient.unsubscribe(subscriptions)
 }
 
+// IsReconnecting 检查是否正在重连 (用于外部判断是否需要触发 ForceReconnect)
+func (c *WsClientWrapper) IsReconnecting() bool {
+	return atomic.LoadInt32(&c.baseClient.reconnecting) == 1
+}
+
+// ErrReconnectInProgress 表示重连已在进行中，ForceReconnect 被跳过
+var ErrReconnectInProgress = errors.New("reconnect already in progress")
+
 // ForceReconnect 强制断开并重新连接 (用于应用层看门狗)
 func (c *WsClientWrapper) ForceReconnect() error {
+	// ⚠️ 如果已经在重连中，返回特定错误以便调用方正确处理
+	if c.IsReconnecting() {
+		c.baseClient.logger.Info("🔄 重连已在进行中，跳过 ForceReconnect")
+		return ErrReconnectInProgress
+	}
+
 	c.baseClient.logger.Info("🔄 应用层触发强制重连...")
 
-	// 先断开
-	if err := c.baseClient.disconnect(); err != nil {
+	// 先强制断开 (不修改 autoReconnect)
+	if err := c.baseClient.forceDisconnect(); err != nil {
 		c.baseClient.logger.Warn("断开连接时出错: %v", err)
 	}
 
-	// 等待一小段时间让旧连接完全关闭
-	// time.Sleep(500 * time.Millisecond)
+	// 等待旧的 goroutine 退出
+	c.baseClient.stopLoops()
 
 	// 重新连接
 	return c.baseClient.connect()

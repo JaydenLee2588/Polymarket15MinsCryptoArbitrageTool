@@ -12,9 +12,9 @@ groups:
     leg1_share_price_1: 0.66          # 第一价格阈值
     leg1_share_price_2: 0.78          # 第二价格阈值  
     leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
+    leg1_share_amount_1: 12            # 价格在 (0.54, 0.66] 买入数量
+    leg1_share_amount_2: 10            # 价格在 (0.66, 0.78] 买入数量
+    leg1_share_amount_3: 9            # 价格在 (0.78, 0.90] 买入数量
     # 滑点配置 (用于 FAK/FOK 订单类型)
     max_slippage: 0.08                # 最大滑点 (5 美分)
     price_tick_size: 0.01             # 最小价格单位 (1 美分)

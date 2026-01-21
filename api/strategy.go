@@ -273,7 +273,7 @@ func runSimulationLoop(configs []StrategyConfig) {
 	scanInterval := configs[0].ScanIntervalSec
 	restTicker := time.NewTicker(time.Duration(scanInterval) * time.Second)
 	resTicker := time.NewTicker(60 * time.Second)
-	heartbeatTicker := time.NewTicker(60 * time.Second)
+	heartbeatTicker := time.NewTicker(10 * time.Second) // 更频繁检测数据流状态 (10s)
 	defer restTicker.Stop()
 	defer resTicker.Stop()
 	defer heartbeatTicker.Stop()
@@ -291,9 +291,11 @@ func runSimulationLoop(configs []StrategyConfig) {
 		case <-restTicker.C:
 			scanAndSubscribe(sdk, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
 
-			// 过期检测
+			// 过期检测与订阅清理 (PruneAndSubscribe 模式)
 			now := time.Now()
 			simMu.Lock()
+			expiredSlugs := []string{} // 收集过期的 slug
+
 			for configID, states := range allConfigStates {
 				for slug, state := range states {
 					parts := strings.Split(slug, "-")
@@ -301,15 +303,54 @@ func runSimulationLoop(configs []StrategyConfig) {
 						ts, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
 						if err == nil {
 							windowEnd := time.Unix(ts, 0).Add(15 * time.Minute)
-							if now.After(windowEnd) {
+							// 使用 5 分钟缓冲，确保决议检查有足够时间
+							expireBuffer := windowEnd.Add(5 * time.Minute)
+							if now.After(expireBuffer) {
 								if state.Leg1Filled {
 									log.Printf("⏰ [%s] 轮次过期，移入等待决议: %s", configID, slug)
 									allPendingResolutions[configID][slug] = state
 								}
 								delete(states, slug)
+
+								// 记录需要清理的 slug (去重)
+								found := false
+								for _, s := range expiredSlugs {
+									if s == slug {
+										found = true
+										break
+									}
+								}
+								if !found {
+									expiredSlugs = append(expiredSlugs, slug)
+								}
 							}
 						}
 					}
+				}
+			}
+
+			// 🗑️ 清理过期的 sharedMarketTokens
+			for _, slug := range expiredSlugs {
+				if _, exists := sharedMarketTokens[slug]; exists {
+					log.Printf("🗑️ 移除过期资产订阅: %s", slug)
+					delete(sharedMarketTokens, slug)
+				}
+			}
+
+			// 如果有清理，重新发送订阅列表 (覆盖模式自动退订)
+			if len(expiredSlugs) > 0 {
+				var remainingTokenIDs []string
+				for _, tokenMap := range sharedMarketTokens {
+					for tid := range tokenMap {
+						remainingTokenIDs = append(remainingTokenIDs, tid)
+					}
+				}
+				if len(remainingTokenIDs) > 0 {
+					filter := &src.CLOBMarketFilter{TokenIDs: remainingTokenIDs}
+					sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
+					log.Printf("🔄 刷新订阅列表: 当前监控 %d 个资产 (移除 %d 个过期)", len(remainingTokenIDs), len(expiredSlugs))
+				} else {
+					log.Printf("🔄 刷新订阅列表: 所有市场已过期，暂无活跃订阅")
 				}
 			}
 			simMu.Unlock()
@@ -381,11 +422,16 @@ func runSimulationLoop(configs []StrategyConfig) {
 			staleDuration := time.Since(lastPriceUpdateTime)
 			lastPriceUpdateMu.Unlock()
 
-			if totalCallbacks > 0 && staleDuration > 60*time.Second {
+			// ⚠️ 阈值降低到 10 秒，极速检测断流 (加密市场数据量大，10秒无数据即视为异常)
+			if totalCallbacks > 0 && staleDuration > 10*time.Second {
 				log.Printf("⚠️ [看门狗] 检测到数据流中断 (%.0f秒无更新)，正在强制重连...", staleDuration.Seconds())
 
 				// 强制重连
-				if err := sdk.ForceReconnect(); err != nil {
+				err := sdk.ForceReconnect()
+				if err == src.ErrReconnectInProgress {
+					// 重连已在进行中，等待它完成，不做任何操作
+					log.Printf("ℹ️ [看门狗] 重连正在进行中，等待完成...")
+				} else if err != nil {
 					log.Printf("❌ [看门狗] 强制重连失败: %v", err)
 				} else {
 					log.Printf("✅ [看门狗] 重连成功，正在恢复订阅...")
@@ -472,61 +518,101 @@ func scanAndSubscribe(
 	}
 	simMu.Unlock()
 
-	// 订阅 - ⚠️ 关键修复: Polymarket 使用"覆盖性"订阅机制
-	// 每次发送订阅都会替换旧的，所以必须发送完整的 token 列表
+	// ⭐ Hot Reconnect 策略: 发现新市场时主动重连，而非在旧连接上 resubscribe
+	// 原因: Polymarket 服务端在处理订阅变更时存在状态泄露问题，导致数据流中断
+	// HFT 工程最佳实践: 定期轮换连接，防止状态腐烂
 	if len(newTokenIDs) > 0 {
-		// 构建完整的 token 列表（所有已知市场的所有 token）
+		log.Printf("🔄 [Hot Reconnect] 检测到换届 (新增 %d 个资产)，主动触发重连以获取干净管道...", len(newTokenIDs))
+
+		// 1. 清理过期市场，只保留当前活跃的 (瘦身订阅列表)
 		simMu.Lock()
-		var allTokenIDs []string
+		now := time.Now()
+		expiredCount := 0
+		for slug := range sharedMarketTokens {
+			parts := strings.Split(slug, "-")
+			if len(parts) >= 4 {
+				ts, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+				if err == nil {
+					windowEnd := time.Unix(ts, 0).Add(15 * time.Minute)
+					// 已过期的市场，从订阅列表中移除
+					if now.After(windowEnd) {
+						delete(sharedMarketTokens, slug)
+						expiredCount++
+					}
+				}
+			}
+		}
+		if expiredCount > 0 {
+			log.Printf("🗑️ [Hot Reconnect] 清理 %d 个过期市场订阅", expiredCount)
+		}
+
+		// 2. 构建瘦身后的 token 列表
+		var activeTokenIDs []string
 		for _, tokenMap := range sharedMarketTokens {
 			for tid := range tokenMap {
-				allTokenIDs = append(allTokenIDs, tid)
+				activeTokenIDs = append(activeTokenIDs, tid)
 			}
 		}
 		simMu.Unlock()
 
-		filter := &src.CLOBMarketFilter{TokenIDs: allTokenIDs}
+		// 3. 强制重连 (建立干净的 TCP 管道)
+		err := sdk.ForceReconnect()
+		if err == src.ErrReconnectInProgress {
+			// 重连已在进行中，等待它完成
+			log.Printf("ℹ️ [Hot Reconnect] 重连正在进行中，等待完成...")
+		} else if err != nil {
+			log.Printf("❌ [Hot Reconnect] 重连失败: %v", err)
+		} else {
+			log.Printf("✅ [Hot Reconnect] 重连成功，正在订阅 %d 个活跃资产...", len(activeTokenIDs))
 
-		if !handlersRegistered {
-			log.Printf("🔌 首次订阅 %d 个资产...", len(allTokenIDs))
+			// 4. 在新连接上订阅 (干净的首次订阅，最稳健)
+			if len(activeTokenIDs) > 0 {
+				filter := &src.CLOBMarketFilter{TokenIDs: activeTokenIDs}
 
-			err := sdk.SubscribeToCLOBMarketLastTradePrice(filter, func(price src.LastTradePrice) error {
-				priceUpdateCountMu.Lock()
-				priceUpdateCount++
-				priceUpdateCountMu.Unlock()
+				if !handlersRegistered {
+					err := sdk.SubscribeToCLOBMarketLastTradePrice(filter, func(price src.LastTradePrice) error {
+						priceUpdateCountMu.Lock()
+						priceUpdateCount++
+						priceUpdateCountMu.Unlock()
 
-				lastPriceUpdateMu.Lock()
-				lastPriceUpdateTime = time.Now()
-				lastPriceUpdateMu.Unlock()
+						lastPriceUpdateMu.Lock()
+						lastPriceUpdateTime = time.Now()
+						lastPriceUpdateMu.Unlock()
 
-				simMu.Lock()
-				defer simMu.Unlock()
+						simMu.Lock()
+						defer simMu.Unlock()
 
-				for i, cfg := range configs {
-					states := allConfigStates[cfg.ID]
-					for _, state := range states {
-						if side, ok := state.TokenIDToSide[price.AssetID]; ok {
-							p, _ := parsePrice(price.Price.String())
-							if state.LatestPrices == nil {
-								state.LatestPrices = make(map[string]float64)
+						for i, cfg := range configs {
+							states := allConfigStates[cfg.ID]
+							for _, state := range states {
+								if side, ok := state.TokenIDToSide[price.AssetID]; ok {
+									p, _ := parsePrice(price.Price.String())
+									if state.LatestPrices == nil {
+										state.LatestPrices = make(map[string]float64)
+									}
+									state.LatestPrices[side] = p
+									checkBinanceArbitrage(state, configs[i])
+								}
 							}
-							state.LatestPrices[side] = p
-							checkBinanceArbitrage(state, configs[i])
 						}
-					}
-				}
-				return nil
-			})
+						return nil
+					})
 
-			if err != nil {
-				log.Printf("❌ 订阅 LastTradePrice 失败: %v", err)
+					if err != nil {
+						log.Printf("❌ 订阅 LastTradePrice 失败: %v", err)
+					}
+					handlersRegistered = true
+				} else {
+					sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
+				}
+
+				log.Printf("✅ [Hot Reconnect] 已订阅 %d 个资产 (轻装上阵)", len(activeTokenIDs))
 			}
 
-			handlersRegistered = true
-		} else {
-			// ⚠️ 发送完整列表，不是只发新的！
-			log.Printf("🔌 重新订阅全部 %d 个资产 (新增 %d 个)", len(allTokenIDs), len(newTokenIDs))
-			sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
+			// 5. 重置最后更新时间
+			lastPriceUpdateMu.Lock()
+			lastPriceUpdateTime = time.Now()
+			lastPriceUpdateMu.Unlock()
 		}
 	}
 }
@@ -870,6 +956,10 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		return
 	}
 
+	// 🔍 DEBUG: 记录价格来源
+	log.Printf("📊 [DEBUG][%s] %s 价格查询: side=%s, LatestPrices=%+v, 使用价格=%.4f",
+		state.ConfigGroup, state.Slug, targetSide, state.LatestPrices, price)
+
 	// 计算公允价格 (与 FKGoPolyTools 一致)
 	var trendFactor float64
 	if targetSide == "UP" {
@@ -953,6 +1043,10 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		if config.OrderType == "FOK" || config.OrderType == "FAK" {
 			finalPrice = price + config.MaxSlippage
 		}
+
+		// 🔍 DEBUG: 记录下单价格
+		log.Printf("💰 [DEBUG][%s] 下单价格计算: 原价=%.4f, 滑点=%.4f, 最终价=%.4f, 数量=%.2f",
+			config.ID, price, config.MaxSlippage, finalPrice, amount)
 
 		// 根据 OrderType 选择下单方式 (使用 finalPrice)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
