@@ -2,6 +2,9 @@
 
 import (
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,7 +15,7 @@ import (
 
 type Message struct {
 	ConnectionID string          `json:"connection_id"`
-	Timestamp    int64           `json:"timestamp"`
+	Timestamp    json.RawMessage `json:"timestamp"`
 	Time         time.Time       `json:"-"` // 解析自 timestamp
 	Topic        Topic           `json:"topic"`
 	Type         MessageType     `json:"type"`
@@ -41,10 +44,40 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// 将时间戳解析为 time.Time
-	if m.Timestamp != 0 {
-		// 假设时间戳单位为毫秒
-		m.Time = time.Unix(0, m.Timestamp*int64(time.Millisecond))
+	// 解析 Timestamp (支持 int64 数字或 string)
+	if len(aux.Timestamp) > 0 {
+		// 尝试直接解析为 int64
+		var tsInt int64
+		if err := json.Unmarshal(aux.Timestamp, &tsInt); err == nil {
+			m.Timestamp = json.RawMessage(fmt.Sprintf("%d", tsInt))
+			m.Time = time.Unix(0, tsInt*int64(time.Millisecond))
+		} else {
+			// 尝试解析为 string 然后转 int64
+			var tsStr string
+			if err := json.Unmarshal(aux.Timestamp, &tsStr); err == nil {
+				if tsInt, err := strconv.ParseInt(tsStr, 10, 64); err == nil {
+					m.Timestamp = json.RawMessage(fmt.Sprintf("%d", tsInt))
+					m.Time = time.Unix(0, tsInt*int64(time.Millisecond))
+				}
+			}
+		}
+	}
+
+	// 自动推断 Payload 和 Type/Topic (如果缺失)
+	// CLOB WS 消息格式: {"market": "...", "price_changes": [...], "timestamp": "..."}
+	// 没有 topic 和 type 字段，也没有 payload 字段
+	if len(m.Payload) == 0 {
+		// 检查是否包含 price_changes
+		if strings.Contains(string(data), `"price_changes"`) {
+			m.Topic = TopicClobMarket
+			m.Type = MessageTypePriceChange
+			m.Payload = data // 整个消息作为 payload
+		} else if strings.Contains(string(data), `"market"`) && strings.Contains(string(data), `"price"`) {
+			// 可能是最新成交价 (虽然 CLOB 文档说是 price_change)
+			m.Topic = TopicClobMarket
+			m.Type = MessageTypeLastTradePrice
+			m.Payload = data
+		}
 	}
 
 	return nil
@@ -133,4 +166,3 @@ const (
 	MessageTypeCLOBAggOrderbook   = MessageTypeAggOrderbook
 	MessageTypeCLOBLastTradePrice = MessageTypeLastTradePrice
 )
-

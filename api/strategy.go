@@ -225,8 +225,8 @@ func StartSimulation(configs []StrategyConfig) bool {
 func runSimulationLoop(configs []StrategyConfig) {
 	// 1. 初始化 Polymarket WebSocket (启用 uTLS Chrome 指纹模拟以绕过 Cloudflare)
 	sdk := src.New(
-		src.WithLogger(src.NewSilentLogger()),
-		src.WithUseTLS(true), // 启用 uTLS 模拟 Chrome TLS 指纹
+		src.WithLogger(src.NewLogger(src.LogLevelInfo)), // 启用日志以查看错误
+		src.WithUseTLS(true),                            // 启用 uTLS 模拟 Chrome TLS 指纹
 	)
 
 	if err := sdk.Connect(); err != nil {

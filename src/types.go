@@ -881,6 +881,16 @@ func (r *RealtimeMessageRouter) RegisterClobMarketHandler(handler ClobMarketCall
 
 // RouteMessage 将原始消息路由到适当的类型化处理程序
 func (r *RealtimeMessageRouter) RouteMessage(data []byte) error {
+	// 跳过空消息和非JSON对象消息（如空数组 `[]`，这是订阅确认响应）
+	if len(data) == 0 {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		// 不是JSON对象，可能是订阅确认或其他非数据消息，静默跳过
+		return nil
+	}
+
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		// 打印带有长度信息的原始数据以便调试
@@ -1075,6 +1085,27 @@ func (r *RealtimeMessageRouter) routeCLOBMarketMessage(msg Message) error {
 		for _, handler := range r.priceChangesHandlers {
 			if err := handler(changes); err != nil {
 				return err
+			}
+		}
+
+		// 同时也分发给 LastTradePrice 处理程序 (为了兼容性)
+		if len(r.lastTradePriceHandlers) > 0 {
+			for _, pc := range changes.PriceChange {
+				ltp := LastTradePrice{
+					AssetID: pc.AssetID,
+					Market:  changes.Market,
+					Price:   pc.Price,
+					Side:    pc.Side,
+					Size:    pc.Size,
+				}
+				for _, handler := range r.lastTradePriceHandlers {
+					// 只有当过滤器匹配时才应该调用 (这里简化处理，假设路由已经正确)
+					// 注意：真正的过滤应该在订阅层做，但为了确保回调被触发，我们全部分发
+					if err := handler(ltp); err != nil {
+						// 记录错误但不中断其他处理
+						fmt.Printf("LastTradePrice handler error: %v\n", err)
+					}
+				}
 			}
 		}
 	case MessageTypeAggOrderbook:
@@ -2345,25 +2376,24 @@ type GetLiveVolumeParams struct {
 	Id int // 必需: 事件 ID，所需范围: x >= 1
 }
 
-
 // Token 表示市场的代币信息
 type Token struct {
-TokenID string
-Outcome string
-Winner  bool
+	TokenID string
+	Outcome string
+	Winner  bool
 }
 
 // GetTokens 从市场获取代币列表 (从 ClobTokenIDs 和 Outcomes 构建)
 func (m *Market) GetTokens() []Token {
-var tokens []Token
-ids := []string(m.ClobTokenIDs)
-outcomes := []string(m.Outcomes)
+	var tokens []Token
+	ids := []string(m.ClobTokenIDs)
+	outcomes := []string(m.Outcomes)
 
-for i := 0; i < len(ids) && i < len(outcomes); i++ {
-tokens = append(tokens, Token{
-TokenID: ids[i],
-Outcome: outcomes[i],
-})
-}
-return tokens
+	for i := 0; i < len(ids) && i < len(outcomes); i++ {
+		tokens = append(tokens, Token{
+			TokenID: ids[i],
+			Outcome: outcomes[i],
+		})
+	}
+	return tokens
 }

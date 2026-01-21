@@ -251,20 +251,20 @@ type CLOBMakerOrder struct {
 
 // PriceChanges 代表 CLOB 市场价格变动。
 type PriceChanges struct {
-	Market      string        `json:"m"`  // 条件 ID
-	PriceChange []PriceChange `json:"pc"` // 按订单簿的价格变动
-	Timestamp   string        `json:"t"`  // 自纪元以来的时间戳（毫秒）(UNIX 时间 * 1000)
+	Market      string        `json:"market"`        // 条件 ID
+	PriceChange []PriceChange `json:"price_changes"` // 按订单簿的价格变动
+	Timestamp   string        `json:"timestamp"`     // 自纪元以来的时间戳（毫秒）(UNIX 时间 * 1000)
 }
 
 // PriceChange 代表 CLOB 市场中的单次价格变动。
 type PriceChange struct {
-	AssetID string          `json:"a"`  // 资产标识符
-	Hash    string          `json:"h"`  // 订单簿快照的唯一哈希 ID
-	Price   decimal.Decimal `json:"p"`  // 报价 (例如, 0.5)
-	Side    Side            `json:"si"` // 报价方: BUY 或 SELL
-	Size    decimal.Decimal `json:"s"`  // 报价处可用的数量或体积 (例如, 0, 100)
-	BestAsk decimal.Decimal `json:"ba"` // 最佳卖价
-	BestBid decimal.Decimal `json:"bb"` // 最佳买价
+	AssetID string          `json:"asset_id"` // 资产标识符
+	Hash    string          `json:"hash"`     // 订单簿快照的唯一哈希 ID
+	Price   decimal.Decimal `json:"price"`    // 报价 (例如, 0.5)
+	Side    Side            `json:"side"`     // 报价方: BUY 或 SELL
+	Size    decimal.Decimal `json:"size"`     // 报价处可用的数量或体积 (例如, 0, 100)
+	BestAsk decimal.Decimal `json:"best_ask"` // 最佳卖价
+	BestBid decimal.Decimal `json:"best_bid"` // 最佳买价
 }
 
 // AggOrderbook 代表 CLOB 市场聚合订单簿。
@@ -313,4 +313,3 @@ type ClobMarket struct {
 	TickSize     decimal.Decimal `json:"tick_size"`      // 最小允许价格增量
 	NegRisk      bool            `json:"neg_risk"`       // 指示市场是否为负风险
 }
-
