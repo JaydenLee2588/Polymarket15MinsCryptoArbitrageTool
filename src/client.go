@@ -144,3 +144,18 @@ func (c *WsClientWrapper) Unsubscribe(subscriptions []Subscription) error {
 	return c.baseClient.unsubscribe(subscriptions)
 }
 
+// ForceReconnect 强制断开并重新连接 (用于应用层看门狗)
+func (c *WsClientWrapper) ForceReconnect() error {
+	c.baseClient.logger.Info("🔄 应用层触发强制重连...")
+
+	// 先断开
+	if err := c.baseClient.disconnect(); err != nil {
+		c.baseClient.logger.Warn("断开连接时出错: %v", err)
+	}
+
+	// 等待一小段时间让旧连接完全关闭
+	// time.Sleep(500 * time.Millisecond)
+
+	// 重新连接
+	return c.baseClient.connect()
+}

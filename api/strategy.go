@@ -375,6 +375,43 @@ func runSimulationLoop(configs []StrategyConfig) {
 
 			log.Printf("💓 [心跳] 活跃市场: %d, 等待决议: %d, Binance: %s, 最后更新: %s, 回调数: %d",
 				totalActive, totalPending, binanceStatus, lastUpdateAgo, totalCallbacks)
+
+			// ⭐ 应用层看门狗: 如果价格更新超过 60 秒没收到，强制重连
+			lastPriceUpdateMu.Lock()
+			staleDuration := time.Since(lastPriceUpdateTime)
+			lastPriceUpdateMu.Unlock()
+
+			if totalCallbacks > 0 && staleDuration > 60*time.Second {
+				log.Printf("⚠️ [看门狗] 检测到数据流中断 (%.0f秒无更新)，正在强制重连...", staleDuration.Seconds())
+
+				// 强制重连
+				if err := sdk.ForceReconnect(); err != nil {
+					log.Printf("❌ [看门狗] 强制重连失败: %v", err)
+				} else {
+					log.Printf("✅ [看门狗] 重连成功，正在恢复订阅...")
+
+					// 重新订阅所有当前市场的 token
+					simMu.Lock()
+					var allTokenIDs []string
+					for _, tokenMap := range sharedMarketTokens {
+						for tid := range tokenMap {
+							allTokenIDs = append(allTokenIDs, tid)
+						}
+					}
+					simMu.Unlock()
+
+					if len(allTokenIDs) > 0 {
+						filter := &src.CLOBMarketFilter{TokenIDs: allTokenIDs}
+						sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
+						log.Printf("✅ [看门狗] 已重新订阅 %d 个资产", len(allTokenIDs))
+					}
+
+					// 重置最后更新时间
+					lastPriceUpdateMu.Lock()
+					lastPriceUpdateTime = time.Now()
+					lastPriceUpdateMu.Unlock()
+				}
+			}
 		}
 	}
 }
