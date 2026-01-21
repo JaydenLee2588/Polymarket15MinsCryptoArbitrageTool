@@ -40,6 +40,9 @@ type MarketState struct {
 	// 错误追踪 (用于冷却机制)
 	LastOrderErrorTime time.Time
 	LastOrderError     string
+
+	// 日志限流
+	LastEdgeLogTime time.Time
 }
 
 // 全局状态
@@ -100,15 +103,15 @@ func StartSimulation(configs []StrategyConfig) bool {
 		proxyWalletAddr := os.Getenv("PROXY_WALLET_ADDRESS")
 		if proxyWalletAddr != "" {
 			makerAddress = proxyWalletAddr
-			log.Printf("📋 使用代理钱包 (来自 PROXY_WALLET_ADDRESS): %s", proxyWalletAddr)
+			// log.Printf("📋 使用代理钱包 (来自 PROXY_WALLET_ADDRESS): %s", proxyWalletAddr)
 		} else {
 			// 兼容旧配置 MAKER_ADDRESS
 			envMakerAddr := os.Getenv("MAKER_ADDRESS")
 			if envMakerAddr != "" {
 				makerAddress = envMakerAddr
-				log.Printf("📋 使用代理钱包 (来自 MAKER_ADDRESS): %s", envMakerAddr)
+				// log.Printf("📋 使用代理钱包 (来自 MAKER_ADDRESS): %s", envMakerAddr)
 			} else {
-				log.Printf("ℹ️  未配置代理钱包地址，将使用 EOA 直接签名")
+				// log.Printf("ℹ️  未配置代理钱包地址，将使用 EOA 直接签名")
 			}
 		}
 
@@ -127,8 +130,8 @@ func StartSimulation(configs []StrategyConfig) bool {
 				Passphrase: manualPassphrase,
 			}
 			log.Printf("📋 使用手动配置的 API 凭证")
-			log.Printf("   EOA 地址 (API 绑定): %s", manualEOAAddress)
-			log.Printf("   API Key (前8位): %s...", manualAPIKey[:8])
+			// log.Printf("   EOA 地址 (API 绑定): %s", manualEOAAddress)
+			// log.Printf("   API Key (前8位): %s...", manualAPIKey[:8])
 		} else {
 			// 自动派生 API 凭证
 			authClient, err := src.NewAuthClient(privateKey)
@@ -142,9 +145,7 @@ func StartSimulation(configs []StrategyConfig) bool {
 				log.Printf("❌ 派生 API 凭证失败: %v", err)
 				return false
 			}
-			log.Printf("📋 自动派生 API 凭证")
-			log.Printf("   Signer 地址 (API Key 绑定): %s", authClient.GetAddress())
-			log.Printf("   API Key (前8位): %s...", creds.APIKey[:8])
+			// log.Printf("📋 自动派生 API 凭证")
 		}
 
 		// 创建 ClobOrderClient (使用手动 EOA 地址或为空)
@@ -164,8 +165,8 @@ func StartSimulation(configs []StrategyConfig) bool {
 
 		// 调试：打印凭证绑定的地址信息
 		log.Printf("✅ 真实交易模式已启用")
-		log.Printf("   Maker 地址 (订单创建者): %s", client.GetAddress())
-		log.Printf("   API 请求地址: %s", client.GetAPIAddress())
+		// log.Printf("   Maker 地址 (订单创建者): %s", client.GetAddress())
+		// log.Printf("   API 请求地址: %s", client.GetAPIAddress())
 
 		// ========== 初始化赎回服务 ==========
 		rpcURL := os.Getenv("POLYGON_RPC_URL")
@@ -210,12 +211,14 @@ func StartSimulation(configs []StrategyConfig) bool {
 		if cfg.TradingMode == "real" {
 			modeTag = "💰真实"
 		}
-		orderTypeTag := "市价"
-		if cfg.OrderType == "limit" {
-			orderTypeTag = "挂单"
+
+		orderTypeStr := cfg.OrderType
+		if orderTypeStr == "" {
+			orderTypeStr = "GTC" // 默认
 		}
-		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s",
-			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeTag)
+
+		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s, 转换系数=%.2f, 价格优势=%.2f, 最大滑点=%.2f%%",
+			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeStr, cfg.FairPriceTrendFactor, cfg.MinPriceEdge, cfg.MaxSlippage*100)
 	}
 
 	return true
@@ -236,7 +239,7 @@ func runSimulationLoop(configs []StrategyConfig) {
 	}
 	defer sdk.Disconnect()
 
-	log.Println("✅ 已连接到 Polymarket WS")
+	log.Printf("✅ 已连接到 Polymarket WS [%s]", src.WebSocketURL)
 
 	// 2. 初始化 Binance WebSocket
 	binanceSymbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
@@ -838,10 +841,11 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 
 	// 记录决策过程 (用于调试为什么没交易)
 	if priceEdge < config.MinPriceEdge {
-		// 如果有趋势但优势不足，每分钟记录一次
-		if time.Since(state.StartTime).Seconds() > 120 && int(time.Now().Unix())%30 == 0 {
+		// 如果有趋势但优势不足，每10秒记录一次
+		if time.Since(state.LastEdgeLogTime) > 10*time.Second {
 			log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: 公允价=%.3f, 现价=%.3f, 优势=%.3f (要求=%.2f)",
 				state.ConfigGroup, state.Slug, targetSide, trendPercent*100, fairPrice, price, priceEdge, config.MinPriceEdge)
+			state.LastEdgeLogTime = time.Now()
 		}
 		return
 	}
