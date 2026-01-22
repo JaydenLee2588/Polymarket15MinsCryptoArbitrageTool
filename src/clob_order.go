@@ -319,8 +319,8 @@ func (c *ClobOrderClient) PlaceOrder(
 		sigType = model.POLY_PROXY
 	}
 	// 🔍 DEBUG: 确认签名类型
-	fmt.Printf("🔐 [DEBUG] 签名配置: Maker=%s, Signer=%s, Type=%d (0=EOA, 1=PROXY, 2=SAFE)\n",
-		c.address.Hex(), c.signerAddress.Hex(), sigType)
+	//fmt.Printf("🔐 [DEBUG] 签名配置: Maker=%s, Signer=%s, Type=%d (0=EOA, 1=PROXY, 2=SAFE)\n",
+	//	c.address.Hex(), c.signerAddress.Hex(), sigType)
 	orderData := &model.OrderData{
 		Maker:         c.address.Hex(), // Maker 地址 (代理钱包或 EOA)
 		Taker:         OperatorAddress, // Polymarket 操作员地址

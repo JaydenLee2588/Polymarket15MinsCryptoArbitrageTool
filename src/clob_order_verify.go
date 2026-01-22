@@ -20,6 +20,7 @@ type VerifyOrderStatusResult struct {
 // 参数:
 //   - ctx: 上下文
 //   - orderID: 订单ID
+//   - marketSlug: 市场 Slug (用于日志显示)
 //   - maxRetries: 最大重试次数（默认3次）
 //   - retryInterval: 重试间隔（默认3秒）
 //
@@ -28,6 +29,7 @@ type VerifyOrderStatusResult struct {
 func (c *ClobOrderClient) VerifyOrderCompletion(
 	ctx context.Context,
 	orderID string,
+	marketSlug string,
 	maxRetries int,
 	retryInterval time.Duration,
 ) *VerifyOrderStatusResult {
@@ -66,8 +68,12 @@ func (c *ClobOrderClient) VerifyOrderCompletion(
 		}
 
 		// 记录状态
-		log.Printf("🔍 第 %d 次查询: 状态=%s, 成交=%s/%s",
-			i+1, status.Status, status.SizeMatched, status.OriginalSize)
+		displayMarket := marketSlug
+		if displayMarket == "" {
+			displayMarket = status.MarketHash
+		}
+		log.Printf("🔍 第 %d 次查询: 市场=%s, 方向=%s, 状态=%s, 单价=%v, 成交=%v/%v",
+			i+1, displayMarket, status.Side, status.Status, status.Price, status.SizeMatched, status.OriginalSize)
 
 		// 检查是否完全成交
 		if status.Status == "MATCHED" {

@@ -23,9 +23,9 @@ import (
 // 默认配置
 const (
 	DefaultWSURL        = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-	DefaultPingInterval = 10 * time.Second
+	DefaultPingInterval = 20 * time.Second // Ping 间隔 20秒
 	DefaultReadTimeout  = 30 * time.Second
-	MaxReconnectBackoff = time.Minute
+	MaxReconnectBackoff = 30 * time.Second // 最大重连退避时间 30秒
 )
 
 // StreamMessage 表示从 WebSocket 收到的消息
@@ -187,6 +187,15 @@ func NewStream(config StreamConfig) *Stream {
 // Connect 建立 WebSocket 连接
 func (s *Stream) Connect() error {
 	s.mu.Lock()
+	// 如果已有连接，先关闭它
+	if s.conn != nil {
+		s.logger.Debug("关闭现有连接...")
+		s.conn.Close()
+		s.conn = nil
+	}
+	s.mu.Unlock()
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	dialer := websocket.Dialer{
@@ -217,7 +226,7 @@ func (s *Stream) Connect() error {
 	// 启动僵死检测
 	go s.healthCheck()
 
-	s.logger.Info("✅ WebSocket 连接成功")
+	//s.logger.Info("✅ WebSocket 连接成功")
 	return nil
 }
 
@@ -229,6 +238,9 @@ func (s *Stream) Subscribe(assetIDs []string, ch chan StreamMessage) error {
 	if s.conn == nil {
 		return fmt.Errorf("not connected")
 	}
+
+	// 写入超时保护：避免网络异常时 WriteJSON 阻塞导致“卡死无日志”
+	const writeTimeout = 5 * time.Second
 
 	// 存储资产 ID 用于重订阅
 	s.assetIDs = append(s.assetIDs, assetIDs...)
@@ -243,7 +255,9 @@ func (s *Stream) Subscribe(assetIDs []string, ch chan StreamMessage) error {
 		"assets_ids": assetIDs,
 		"type":       "market",
 	}
+	s.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := s.conn.WriteJSON(marketMsg); err != nil {
+		s.logger.Error("发送 market 订阅失败: %v", err)
 		return fmt.Errorf("failed to send market subscription: %w", err)
 	}
 
@@ -252,7 +266,9 @@ func (s *Stream) Subscribe(assetIDs []string, ch chan StreamMessage) error {
 		"assets_ids": assetIDs,
 		"type":       "book",
 	}
+	s.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := s.conn.WriteJSON(bookMsg); err != nil {
+		s.logger.Error("发送 book 订阅失败: %v", err)
 		return fmt.Errorf("failed to send book subscription: %w", err)
 	}
 
@@ -307,6 +323,9 @@ func (s *Stream) pingLoop() {
 	ticker := time.NewTicker(s.pingInterval)
 	defer ticker.Stop()
 
+	// PING 写入超时（3秒，应该足够快）
+	pingWriteTimeout := 3 * time.Second
+
 	for {
 		select {
 		case <-s.pingDone:
@@ -318,11 +337,18 @@ func (s *Stream) pingLoop() {
 			conn := s.conn
 			s.mu.RUnlock()
 
-			if conn != nil {
-				// 使用大写 PING (polymarkt-go 格式)
-				if err := conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
-					s.logger.Warn("发送 PING 失败: %v", err)
-				}
+			if conn == nil {
+				s.logger.Debug("跳过 PING：连接为 nil")
+				continue
+			}
+
+			// 设置写入超时，避免在连接异常时长时间阻塞
+			conn.SetWriteDeadline(time.Now().Add(pingWriteTimeout))
+			// 使用大写 PING (polymarkt-go 格式)
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
+				s.logger.Warn("⚠️ [RT] 发送 PING 失败: %v", err)
+				// PING 失败通常意味着连接已断开，但让 readLoop 来处理重连逻辑
+				// 这里不主动关闭连接，避免与 readLoop 的重连逻辑冲突
 			}
 		}
 	}
@@ -359,6 +385,9 @@ func (s *Stream) healthCheck() {
 
 // readLoop 持续从 WebSocket 读取消息
 func (s *Stream) readLoop() {
+	// 读取超时（65秒，略大于健康检查的60秒阈值，参考 base_client.go）
+	readTimeout := 65 * time.Second
+
 	for {
 		select {
 		case <-s.done:
@@ -374,20 +403,26 @@ func (s *Stream) readLoop() {
 			return
 		}
 
+		// 设置读取超时，避免在连接异常时长时间阻塞
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			s.logger.Warn("WebSocket 读取错误: %v", err)
-			// 检查是否是主动关闭（done 通道已关闭）- 避免触发不必要的重连
+			// 检查是否是主动关闭（done 通道已关闭）
 			select {
 			case <-s.done:
+				s.logger.Info("✅ 主动关闭 WS 连接 (停止读取)")
 				return // 主动关闭，不重连
 			default:
+				s.logger.Warn("⚠️ [RT] WebSocket 读取错误: %v", err)
 			}
 			if s.reconnect {
 				s.handleReconnect()
 			}
 			return
 		}
+
+		// 收到消息后重置读取超时（续命）
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 
 		// 更新最后消息时间
 		s.lastMessageMu.Lock()
@@ -472,6 +507,8 @@ func (s *Stream) dispatch(msg StreamMessage) {
 
 // handleReconnect 使用指数退避尝试重连
 func (s *Stream) handleReconnect() {
+	s.logger.Info("🔄 开始重连流程...")
+
 	// 停止旧连接的 ping 循环
 	if s.pingDone != nil {
 		select {
@@ -482,12 +519,23 @@ func (s *Stream) handleReconnect() {
 		}
 	}
 
-	backoff := time.Second
+	// 关闭旧连接（如果存在）
+	s.mu.Lock()
+	if s.conn != nil {
+		s.logger.Debug("关闭旧连接...")
+		s.conn.Close()
+		s.conn = nil
+	}
+	s.mu.Unlock()
+
+	// 指数退避: 2s, 4s, 8s, 16s, 30s (max)
+	backoff := 2 * time.Second
 	maxBackoff := MaxReconnectBackoff
 
 	for {
 		select {
 		case <-s.done:
+			s.logger.Info("重连已取消（done 通道关闭）")
 			return
 		default:
 		}
@@ -498,21 +546,30 @@ func (s *Stream) handleReconnect() {
 		// 1. 先调用重连回调拉取 REST 快照（阻塞等待完成）
 		if s.onReconnect != nil {
 			s.logger.Info("📥 重连中: 先拉取 REST 快照...")
+			startTime := time.Now()
 			s.onReconnect() // 同步调用，确保快照拉取完成
+			s.logger.Info("📥 REST 快照拉取完成，耗时: %v", time.Since(startTime))
 		}
 
 		// 2. 建立连接
+		s.logger.Info("🔌 正在建立 WebSocket 连接...")
+		connectStartTime := time.Now()
 		if err := s.Connect(); err != nil {
-			s.logger.Error("重连失败: %v", err)
+			s.logger.Error("❌ 重连失败: %v (耗时: %v)", err, time.Since(connectStartTime))
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
 			continue
 		}
+		s.logger.Info("✅ WebSocket 连接建立成功，耗时: %v", time.Since(connectStartTime))
 
 		// 3. 重新订阅所有资产
+		s.logger.Info("📡 正在重新订阅资产...")
+		subscribeStartTime := time.Now()
 		s.resubscribe()
+		s.logger.Info("✅ 重新订阅完成，耗时: %v", time.Since(subscribeStartTime))
+
 		s.logger.Info("✅ 重连成功 (快照→连接→订阅)")
 		return
 	}
@@ -523,33 +580,45 @@ func (s *Stream) resubscribe() {
 	s.mu.RLock()
 	assetIDs := make([]string, len(s.assetIDs))
 	copy(assetIDs, s.assetIDs)
+	conn := s.conn
 	s.mu.RUnlock()
 
-	if len(assetIDs) > 0 {
-		// 重新订阅 market (price_change)
-		marketMsg := map[string]interface{}{
-			"assets_ids": assetIDs,
-			"type":       "market",
-		}
-		s.mu.Lock()
-		if s.conn != nil {
-			s.conn.WriteJSON(marketMsg)
-		}
-		s.mu.Unlock()
-
-		// 重新订阅 book
-		bookMsg := map[string]interface{}{
-			"assets_ids": assetIDs,
-			"type":       "book",
-		}
-		s.mu.Lock()
-		if s.conn != nil {
-			s.conn.WriteJSON(bookMsg)
-		}
-		s.mu.Unlock()
-
-		s.logger.Info("已重新订阅 %d 个资产 (market + book)", len(assetIDs))
+	if len(assetIDs) == 0 {
+		s.logger.Warn("没有资产需要重新订阅")
+		return
 	}
+
+	if conn == nil {
+		s.logger.Error("无法重新订阅：连接为 nil")
+		return
+	}
+
+	// 设置写入超时（5秒）
+	writeTimeout := 5 * time.Second
+
+	// 重新订阅 market (price_change)
+	marketMsg := map[string]interface{}{
+		"assets_ids": assetIDs,
+		"type":       "market",
+	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := conn.WriteJSON(marketMsg); err != nil {
+		s.logger.Error("重新订阅 market 失败: %v", err)
+		return
+	}
+
+	// 重新订阅 book
+	bookMsg := map[string]interface{}{
+		"assets_ids": assetIDs,
+		"type":       "book",
+	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := conn.WriteJSON(bookMsg); err != nil {
+		s.logger.Error("重新订阅 book 失败: %v", err)
+		return
+	}
+
+	s.logger.Info("已重新订阅 %d 个资产 (market + book)", len(assetIDs))
 }
 
 // Close 关闭 WebSocket 连接
