@@ -9,7 +9,7 @@ const (
 	defaultPingInterval         = 10 * time.Second
 	defaultAutoReconnect        = true
 	defaultMaxReconnectAttempts = 10 // 0 means infinite retries
-	defaultReconnectBackoffInit = 1 * time.Second
+	defaultReconnectBackoffInit = 2 * time.Second
 	defaultReconnectBackoffMax  = 30 * time.Second
 	defaultWriteTimeout         = 5 * time.Second
 	defaultReadTimeout          = 30 * time.Second

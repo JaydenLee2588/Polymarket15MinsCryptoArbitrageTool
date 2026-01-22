@@ -13,6 +13,7 @@ import (
 
 	"Polymarket15MinsCryptoArbitrageTool/internal/database"
 	"Polymarket15MinsCryptoArbitrageTool/src"
+	"Polymarket15MinsCryptoArbitrageTool/src/realtime"
 )
 
 // MarketState 市场状态 (简化版，只支持 Leg1)
@@ -54,6 +55,14 @@ var (
 	lastPriceUpdateMu   sync.Mutex
 	priceUpdateCount    int64
 	priceUpdateCountMu  sync.Mutex
+
+	// Polymarket MarketManager (新架构)
+	marketManager   *realtime.MarketManager
+	marketManagerMu sync.Mutex
+
+	// 实时回调用状态引用
+	rtConfigsRef      *[]StrategyConfig
+	rtConfigStatesRef *map[string]map[string]*MarketState
 
 	// 真实交易客户端
 	clobOrderClient *src.ClobOrderClient
@@ -217,8 +226,8 @@ func StartSimulation(configs []StrategyConfig) bool {
 			orderTypeStr = "GTC" // 默认
 		}
 
-		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s, 转换系数=%.2f, 价格优势=%.2f, 最大滑点=%.2f%%",
-			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeStr, cfg.FairPriceTrendFactor, cfg.MinPriceEdge, cfg.MaxSlippage*100)
+		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s, 转换系数=%.2f, 价格优势=%.2f, 最大滑点=%.2f",
+			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeStr, cfg.FairPriceTrendFactor, cfg.MinPriceEdge, cfg.MaxSlippage)
 	}
 
 	return true
@@ -226,20 +235,38 @@ func StartSimulation(configs []StrategyConfig) bool {
 
 // runSimulationLoop 模拟循环
 func runSimulationLoop(configs []StrategyConfig) {
-	// 1. 初始化 Polymarket WebSocket (启用 uTLS Chrome 指纹模拟以绕过 Cloudflare)
-	sdk := src.New(
-		src.WithLogger(src.NewLogger(src.LogLevelInfo)), // 启用日志以查看错误
-		src.WithUseTLS(true),                            // 启用 uTLS 模拟 Chrome TLS 指纹
-	)
+	// 3. 状态管理 (先创建，供回调使用)
+	allConfigStates := make(map[string]map[string]*MarketState)
+	allPendingResolutions := make(map[string]map[string]*MarketState)
 
-	if err := sdk.Connect(); err != nil {
-		log.Printf("❌ Polymarket WS 连接错误: %v", err)
-		isSimRunning = false
-		return
+	for _, cfg := range configs {
+		allConfigStates[cfg.ID] = make(map[string]*MarketState)
+		allPendingResolutions[cfg.ID] = make(map[string]*MarketState)
 	}
-	defer sdk.Disconnect()
 
-	log.Printf("✅ 已连接到 Polymarket WS [%s]", src.WebSocketURL)
+	// 设置全局引用 (供 MarketManager 回调使用)
+	rtConfigsRef = &configs
+	rtConfigStatesRef = &allConfigStates
+
+	// 1. 初始化 Polymarket MarketManager (新架构: 订单簿快照 + price_change)
+	logger := &strategyLogger{}
+	mgr := realtime.NewMarketManager(realtime.MarketManagerConfig{
+		SnapshotInterval: 2 * time.Minute,  // 每2分钟 REST 校验
+		PingInterval:     10 * time.Second, // 心跳间隔
+		StaleThreshold:   30 * time.Second, // 僵死检测阈值
+		ChannelBuffer:    500,              // 消息缓冲
+		Logger:           logger,
+		OnPriceChange:    handlePriceChange,
+		OnBookUpdate:     handleBookUpdate,
+		OnError:          handleWSError,
+		OnReconnect:      handleReconnect,
+	})
+
+	marketManagerMu.Lock()
+	marketManager = mgr
+	marketManagerMu.Unlock()
+
+	log.Printf("✅ MarketManager 已初始化 (订单簿快照 + price_change 模式)")
 
 	// 2. 初始化 Binance WebSocket
 	binanceSymbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
@@ -249,15 +276,6 @@ func runSimulationLoop(configs []StrategyConfig) {
 	} else {
 		defer binanceClient.Close()
 		log.Println("✅ 已连接到 Binance WS (监听 15m K线)")
-	}
-
-	// 3. 状态管理
-	allConfigStates := make(map[string]map[string]*MarketState)
-	allPendingResolutions := make(map[string]map[string]*MarketState)
-
-	for _, cfg := range configs {
-		allConfigStates[cfg.ID] = make(map[string]*MarketState)
-		allPendingResolutions[cfg.ID] = make(map[string]*MarketState)
 	}
 
 	// 4. 共享市场发现
@@ -273,13 +291,13 @@ func runSimulationLoop(configs []StrategyConfig) {
 	scanInterval := configs[0].ScanIntervalSec
 	restTicker := time.NewTicker(time.Duration(scanInterval) * time.Second)
 	resTicker := time.NewTicker(60 * time.Second)
-	heartbeatTicker := time.NewTicker(10 * time.Second) // 更频繁检测数据流状态 (10s)
+	heartbeatTicker := time.NewTicker(30 * time.Second) // 更频繁检测数据流状态 (30s)
 	defer restTicker.Stop()
 	defer resTicker.Stop()
 	defer heartbeatTicker.Stop()
 
-	// 初始扫描
-	scanAndSubscribe(sdk, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
+	// 初始扫描并启动 MarketManager
+	scanAndSubscribeWithManager(mgr, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
 
 	// 启动时检查等待决议的交易
 	loadPendingFromDatabase(gammaClient, allPendingResolutions, configs)
@@ -289,7 +307,7 @@ func runSimulationLoop(configs []StrategyConfig) {
 	for {
 		select {
 		case <-restTicker.C:
-			scanAndSubscribe(sdk, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
+			scanAndSubscribeWithManager(mgr, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
 
 			// 过期检测与订阅清理 (PruneAndSubscribe 模式)
 			now := time.Now()
@@ -337,7 +355,7 @@ func runSimulationLoop(configs []StrategyConfig) {
 				}
 			}
 
-			// 如果有清理，重新发送订阅列表 (覆盖模式自动退订)
+			// 如果有清理，使用 MarketManager 切换市场
 			if len(expiredSlugs) > 0 {
 				var remainingTokenIDs []string
 				for _, tokenMap := range sharedMarketTokens {
@@ -345,14 +363,17 @@ func runSimulationLoop(configs []StrategyConfig) {
 						remainingTokenIDs = append(remainingTokenIDs, tid)
 					}
 				}
-				if len(remainingTokenIDs) > 0 {
-					filter := &src.CLOBMarketFilter{TokenIDs: remainingTokenIDs}
-					sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
-					log.Printf("🔄 刷新订阅列表: 当前监控 %d 个资产 (移除 %d 个过期)", len(remainingTokenIDs), len(expiredSlugs))
-				} else {
+				if len(remainingTokenIDs) > 0 && mgr.IsRunning() {
+					if err := mgr.SwitchMarket(remainingTokenIDs); err != nil {
+						log.Printf("❌ 刷新订阅失败: %v", err)
+					} else {
+						log.Printf("🔄 刷新订阅列表: 当前监控 %d 个资产 (移除 %d 个过期)", len(remainingTokenIDs), len(expiredSlugs))
+					}
+				} else if len(remainingTokenIDs) == 0 {
 					log.Printf("🔄 刷新订阅列表: 所有市场已过期，暂无活跃订阅")
 				}
 			}
+
 			simMu.Unlock()
 
 		case <-resTicker.C:
@@ -417,54 +438,275 @@ func runSimulationLoop(configs []StrategyConfig) {
 			log.Printf("💓 [心跳] 活跃市场: %d, 等待决议: %d, Binance: %s, 最后更新: %s, 回调数: %d",
 				totalActive, totalPending, binanceStatus, lastUpdateAgo, totalCallbacks)
 
-			// ⭐ 应用层看门狗: 如果价格更新超过 60 秒没收到，强制重连
-			lastPriceUpdateMu.Lock()
-			staleDuration := time.Since(lastPriceUpdateTime)
-			lastPriceUpdateMu.Unlock()
+			// MarketManager 内置健康检查和自动重连，无需外部 watchdog
+		}
+	}
+}
 
-			// ⚠️ 阈值降低到 10 秒，极速检测断流 (加密市场数据量大，10秒无数据即视为异常)
-			if totalCallbacks > 0 && staleDuration > 10*time.Second {
-				log.Printf("⚠️ [看门狗] 检测到数据流中断 (%.0f秒无更新)，正在强制重连...", staleDuration.Seconds())
+// ========== MarketManager 回调和辅助类型 ==========
 
-				// 强制重连
-				err := sdk.ForceReconnect()
-				if err == src.ErrReconnectInProgress {
-					// 重连已在进行中，等待它完成，不做任何操作
-					log.Printf("ℹ️ [看门狗] 重连正在进行中，等待完成...")
-				} else if err != nil {
-					log.Printf("❌ [看门狗] 强制重连失败: %v", err)
-				} else {
-					log.Printf("✅ [看门狗] 重连成功，正在恢复订阅...")
+// strategyLogger 实现 realtime.Logger 接口
+type strategyLogger struct{}
 
-					// 重新订阅所有当前市场的 token
-					simMu.Lock()
-					var allTokenIDs []string
-					for _, tokenMap := range sharedMarketTokens {
-						for tid := range tokenMap {
-							allTokenIDs = append(allTokenIDs, tid)
+func (l *strategyLogger) Debug(format string, args ...interface{}) {
+	// 策略运行时不需要 debug 日志
+}
+
+func (l *strategyLogger) Info(format string, args ...interface{}) {
+	log.Printf("[RT] "+format, args...)
+}
+
+func (l *strategyLogger) Warn(format string, args ...interface{}) {
+	log.Printf("⚠️ [RT] "+format, args...)
+}
+
+func (l *strategyLogger) Error(format string, args ...interface{}) {
+	log.Printf("❌ [RT] "+format, args...)
+}
+
+// handlePriceChange 处理价格变动事件 (price_change)
+func handlePriceChange(pc realtime.PriceChange) {
+	priceUpdateCountMu.Lock()
+	priceUpdateCount++
+	priceUpdateCountMu.Unlock()
+
+	lastPriceUpdateMu.Lock()
+	lastPriceUpdateTime = time.Now()
+	lastPriceUpdateMu.Unlock()
+
+	simMu.Lock()
+	defer simMu.Unlock()
+
+	if rtConfigsRef == nil || rtConfigStatesRef == nil {
+		return
+	}
+
+	configs := *rtConfigsRef
+	allConfigStates := *rtConfigStatesRef
+
+	for i, cfg := range configs {
+		states := allConfigStates[cfg.ID]
+		for _, state := range states {
+			if side, ok := state.TokenIDToSide[pc.AssetID]; ok {
+				// 优先从本地订单簿获取 BestAsk（最准确）
+				marketManagerMu.Lock()
+				mgr := marketManager
+				marketManagerMu.Unlock()
+
+				var priceToUse float64
+				var source string
+
+				if mgr != nil {
+					book := mgr.GetOrderBook(pc.AssetID)
+					if book != nil {
+						// 策略总是作为 Taker 买入，所以关注卖一价 (BestAsk)
+						price, _, ok := realtime.GetBestAsk(book)
+						if ok && !price.IsZero() {
+							priceToUse = price.InexactFloat64()
+							source = "OrderBook"
 						}
 					}
-					simMu.Unlock()
+				}
 
-					if len(allTokenIDs) > 0 {
-						filter := &src.CLOBMarketFilter{TokenIDs: allTokenIDs}
-						sdk.SubscribeToCLOBMarketLastTradePrice(filter, nil)
-						log.Printf("✅ [看门狗] 已重新订阅 %d 个资产", len(allTokenIDs))
+				// 退路1: 使用 price_change 中的 BestAsk
+				if priceToUse == 0 && !pc.BestAsk.IsZero() {
+					priceToUse = pc.BestAsk.InexactFloat64()
+					source = "BestAsk"
+				}
+
+				// 退路2: 使用 price_change 中的 Price (原始行为)
+				if priceToUse == 0 && !pc.Price.IsZero() {
+					priceToUse = pc.Price.InexactFloat64()
+					source = "Price"
+				}
+
+				if priceToUse > 0 {
+					if state.LatestPrices == nil {
+						state.LatestPrices = make(map[string]float64)
 					}
-
-					// 重置最后更新时间
-					lastPriceUpdateMu.Lock()
-					lastPriceUpdateTime = time.Now()
-					lastPriceUpdateMu.Unlock()
+					state.LatestPrices[side] = priceToUse
+					_ = source // 调试时可取消注释: log.Printf("价格来源: %s = %.4f", source, priceToUse)
+					checkBinanceArbitrage(state, configs[i])
 				}
 			}
 		}
 	}
 }
 
+// handleBookUpdate 处理订单簿更新事件 (book)
+func handleBookUpdate(book *realtime.BookUpdate) {
+	// 订单簿更新也触发价格检查
+	priceUpdateCountMu.Lock()
+	priceUpdateCount++
+	priceUpdateCountMu.Unlock()
+
+	lastPriceUpdateMu.Lock()
+	lastPriceUpdateTime = time.Now()
+	lastPriceUpdateMu.Unlock()
+
+	// 获取最佳卖价
+	bestAskPrice, _, ok := realtime.GetBestAsk(book)
+	if !ok {
+		return
+	}
+	bestAsk := bestAskPrice.InexactFloat64()
+
+	simMu.Lock()
+	defer simMu.Unlock()
+
+	if rtConfigsRef == nil || rtConfigStatesRef == nil {
+		return
+	}
+
+	configs := *rtConfigsRef
+	allConfigStates := *rtConfigStatesRef
+
+	for i, cfg := range configs {
+		states := allConfigStates[cfg.ID]
+		for _, state := range states {
+			if side, ok := state.TokenIDToSide[book.AssetID]; ok {
+				if state.LatestPrices == nil {
+					state.LatestPrices = make(map[string]float64)
+				}
+				state.LatestPrices[side] = bestAsk
+				checkBinanceArbitrage(state, configs[i])
+			}
+		}
+	}
+}
+
+// handleWSError 处理 WebSocket 错误
+func handleWSError(err error) {
+	log.Printf("❌ [MarketManager] WS 错误: %v", err)
+}
+
+// handleReconnect 处理重连事件
+func handleReconnect() {
+	log.Printf("🔄 [MarketManager] WebSocket 已重连")
+}
+
 var handlersRegistered bool
 
+// scanAndSubscribeWithManager 使用 MarketManager 扫描市场并订阅
+// 采用新架构: 关闭旧WS → REST快照 → 新建WS → 订阅
+func scanAndSubscribeWithManager(
+	mgr *realtime.MarketManager,
+	gammaClient *src.Client,
+	allConfigStates map[string]map[string]*MarketState,
+	configs []StrategyConfig,
+	targets []string,
+	sharedMarketTokens map[string]map[string]string,
+) {
+	windowMin := 60
+	newMarkets := scanNewMarkets(gammaClient, sharedMarketTokens, targets, windowMin)
+
+	if len(newMarkets) == 0 {
+		return
+	}
+
+	simMu.Lock()
+	var newTokenIDs []string
+
+	for _, market := range newMarkets {
+		if _, exists := sharedMarketTokens[market.Slug]; !exists {
+			sharedMarketTokens[market.Slug] = make(map[string]string)
+			for tid, side := range market.TokenIDToSide {
+				sharedMarketTokens[market.Slug][tid] = side
+				newTokenIDs = append(newTokenIDs, tid)
+			}
+		}
+
+		for _, cfg := range configs {
+			if _, exists := allConfigStates[cfg.ID][market.Slug]; exists {
+				continue
+			}
+
+			newState := &MarketState{
+				ConfigGroup:   cfg.ID,
+				Slug:          market.Slug,
+				Symbol:        market.Symbol,
+				StartTime:     market.StartTime,
+				EndTime:       market.EndTime,
+				TokenIDToSide: make(map[string]string),
+				SideToTokenID: make(map[string]string),
+				LatestPrices:  make(map[string]float64),
+			}
+
+			for tid, side := range market.TokenIDToSide {
+				newState.TokenIDToSide[tid] = side
+				newState.SideToTokenID[side] = tid
+			}
+
+			allConfigStates[cfg.ID][market.Slug] = newState
+		}
+	}
+	simMu.Unlock()
+
+	// 发现新市场时使用 MarketManager 切换
+	if len(newTokenIDs) > 0 {
+		log.Printf("🔄 [MarketManager] 检测到换届 (新增 %d 个资产)，执行市场切换...", len(newTokenIDs))
+
+		// 1. 清理过期市场，只保留当前活跃的
+		simMu.Lock()
+		now := time.Now()
+		expiredCount := 0
+		for slug := range sharedMarketTokens {
+			parts := strings.Split(slug, "-")
+			if len(parts) >= 4 {
+				ts, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+				if err == nil {
+					windowEnd := time.Unix(ts, 0).Add(15 * time.Minute)
+					if now.After(windowEnd) {
+						delete(sharedMarketTokens, slug)
+						expiredCount++
+					}
+				}
+			}
+		}
+		if expiredCount > 0 {
+			log.Printf("🗑️ [MarketManager] 清理 %d 个过期市场订阅", expiredCount)
+		}
+
+		// 2. 构建瘦身后的 token 列表
+		var activeTokenIDs []string
+		for _, tokenMap := range sharedMarketTokens {
+			for tid := range tokenMap {
+				activeTokenIDs = append(activeTokenIDs, tid)
+			}
+		}
+		simMu.Unlock()
+
+		// 3. 使用 MarketManager 切换市场 (新架构: 关闭旧WS → REST快照 → 新建WS → 订阅)
+		if len(activeTokenIDs) > 0 {
+			if !mgr.IsRunning() {
+				// 首次启动
+				mgr.SetAssetIDs(activeTokenIDs)
+				if err := mgr.Start(); err != nil {
+					log.Printf("❌ [MarketManager] 启动失败: %v", err)
+				} else {
+					log.Printf("✅ [MarketManager] 已启动，订阅 %d 个资产", len(activeTokenIDs))
+				}
+			} else {
+				// 切换市场
+				if err := mgr.SwitchMarket(activeTokenIDs); err != nil {
+					log.Printf("❌ [MarketManager] 市场切换失败: %v", err)
+				} else {
+					log.Printf("✅ [MarketManager] 市场切换成功，订阅 %d 个资产", len(activeTokenIDs))
+				}
+			}
+
+			// 重置最后更新时间
+			lastPriceUpdateMu.Lock()
+			lastPriceUpdateTime = time.Now()
+			lastPriceUpdateMu.Unlock()
+		}
+	}
+}
+
+// ========== 旧版 scanAndSubscribe (保留用于向后兼容) ==========
+
 // scanAndSubscribe 扫描市场并订阅
+
 func scanAndSubscribe(
 	sdk *src.WsClientWrapper,
 	gammaClient *src.Client,
@@ -957,8 +1199,8 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	}
 
 	// 🔍 DEBUG: 记录价格来源
-	log.Printf("📊 [DEBUG][%s] %s 价格查询: side=%s, LatestPrices=%+v, 使用价格=%.4f",
-		state.ConfigGroup, state.Slug, targetSide, state.LatestPrices, price)
+	// log.Printf("📊 [DEBUG][%s] %s 价格查询: side=%s, LatestPrices=%+v, 使用价格=%.4f",
+	// 	state.ConfigGroup, state.Slug, targetSide, state.LatestPrices, price)
 
 	// 计算公允价格 (与 FKGoPolyTools 一致)
 	var trendFactor float64
@@ -1036,7 +1278,32 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 			return
 		}
 
-		// ==== 价格设置 (已移除深度预检查以减少延迟) ====
+		// ==== 本地订单簿流动性检查 (FAK/FOK 需要对手方流动性) ====
+		if config.OrderType == "FOK" || config.OrderType == "FAK" {
+			marketManagerMu.Lock()
+			mgr := marketManager
+			marketManagerMu.Unlock()
+
+			if mgr != nil {
+				book := mgr.GetOrderBook(tokenID)
+				if book == nil || len(book.Asks) == 0 {
+					// 无卖单流动性，静默跳过
+					return
+				}
+
+				// 检查最佳卖价是否可接受
+				bestAskPrice, _, askOk := realtime.GetBestAsk(book)
+				if askOk {
+					maxAcceptablePrice := price + config.MaxSlippage
+					if bestAskPrice.InexactFloat64() > maxAcceptablePrice {
+						// 最佳卖价太高，静默跳过
+						return
+					}
+				}
+			}
+		}
+
+		// ==== 价格设置 ====
 		// 对于 FOK/FAK 模式，直接使用 price + MaxSlippage 作为限价
 		// Polymarket 的 FOK/FAK 机制会自动保证成交质量
 		finalPrice := price

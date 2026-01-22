@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // Client 是 Gamma API 的客户端（用于查询事件和市场元数据）
@@ -154,7 +155,9 @@ func (c *WsClientWrapper) IsReconnecting() bool {
 // ErrReconnectInProgress 表示重连已在进行中，ForceReconnect 被跳过
 var ErrReconnectInProgress = errors.New("reconnect already in progress")
 
-// ForceReconnect 强制断开并重新连接 (用于应用层看门狗)
+// ForceReconnect 强制断开连接并等待 SDK 内部自动重连完成 (用于应用层看门狗和 Hot Reconnect)
+// ⚠️ 此函数是同步的：触发断开后会等待重连完成才返回
+// SDK 内部的 tryAutoReconnect() 会自动处理重连和订阅恢复
 func (c *WsClientWrapper) ForceReconnect() error {
 	// ⚠️ 如果已经在重连中，返回特定错误以便调用方正确处理
 	if c.IsReconnecting() {
@@ -162,16 +165,60 @@ func (c *WsClientWrapper) ForceReconnect() error {
 		return ErrReconnectInProgress
 	}
 
-	c.baseClient.logger.Info("🔄 应用层触发强制重连...")
+	c.baseClient.logger.Info("🔄 应用层触发强制断开，等待 SDK 自动重连...")
 
-	// 先强制断开 (不修改 autoReconnect)
+	// 强制断开连接 (不修改 autoReconnect)
+	// readMessages() 会检测到连接关闭错误，自动触发 tryAutoReconnect()
 	if err := c.baseClient.forceDisconnect(); err != nil {
 		c.baseClient.logger.Warn("断开连接时出错: %v", err)
+		return err
 	}
 
-	// 等待旧的 goroutine 退出
-	c.baseClient.stopLoops()
+	// ⚠️ 等待 SDK 内部重连完成 (最多 30 秒)
+	// 分两阶段：1) 等待重连开始 2) 等待重连完成
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 
-	// 重新连接
-	return c.baseClient.connect()
+	// 阶段 1: 等待重连开始 (IsReconnecting 变为 true)
+	c.baseClient.logger.Debug("等待 SDK 内部重连启动...")
+	reconnectStarted := false
+	for !reconnectStarted {
+		select {
+		case <-timeout:
+			c.baseClient.logger.Error("等待重连启动超时")
+			return errors.New("reconnect start timeout")
+		case <-ticker.C:
+			if c.IsReconnecting() {
+				reconnectStarted = true
+				c.baseClient.logger.Debug("SDK 内部重连已启动")
+			}
+		}
+	}
+
+	// 阶段 2: 等待重连完成 (连接建立且不再重连中)
+	c.baseClient.logger.Debug("等待 SDK 内部重连完成...")
+	for {
+		select {
+		case <-timeout:
+			c.baseClient.logger.Error("等待重连完成超时 (30秒)")
+			return errors.New("reconnect timeout")
+		case <-ticker.C:
+			// 检查重连是否完成：不再重连中 && 连接存在 && 连接未关闭
+			if !c.IsReconnecting() {
+				c.baseClient.connMu.RLock()
+				conn := c.baseClient.conn
+				c.baseClient.connMu.RUnlock()
+
+				c.baseClient.internal.mu.RLock()
+				isClosed := c.baseClient.internal.connClosed
+				c.baseClient.internal.mu.RUnlock()
+
+				if conn != nil && !isClosed {
+					c.baseClient.logger.Info("✓ SDK 重连完成")
+					return nil
+				}
+			}
+		}
+	}
 }

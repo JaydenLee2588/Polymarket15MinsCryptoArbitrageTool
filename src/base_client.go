@@ -1062,6 +1062,8 @@ func (c *baseClient) reconnect() {
 }
 
 // restoreSubscriptions 在重连后恢复所有之前的订阅
+// ⚠️ 重要: Polymarket CLOB WebSocket 使用"覆盖性"订阅机制
+// 必须将所有订阅合并成一个请求发送，否则后面的会覆盖前面的
 func (c *baseClient) restoreSubscriptions() {
 	c.internal.mu.RLock()
 	subscriptions := c.internal.subscriptions
@@ -1078,17 +1080,22 @@ func (c *baseClient) restoreSubscriptions() {
 	subs := make([]Subscription, len(subscriptions))
 	copy(subs, subscriptions)
 
-	// 在重新订阅前清除订阅
-	c.internal.mu.Lock()
-	c.internal.subscriptions = make([]Subscription, 0)
-	c.internal.mu.Unlock()
-
-	// 重新订阅
-	err := c.subscribe(subs)
+	// ⚠️ 合并所有订阅成一个请求发送 (避免覆盖问题)
+	// FormatSubscription 会自动合并所有 token IDs
+	message, err := c.protocol.FormatSubscription(subs)
 	if err != nil {
-		c.logger.Error("恢复订阅失败: %v", err)
-	} else {
+		c.logger.Error("格式化订阅消息失败: %v", err)
+		return
+	}
+
+	c.logger.Debug("发送合并订阅消息: %s", string(message))
+
+	// 通过写入通道发送订阅
+	select {
+	case c.writeChan <- writeRequest{messageType: websocket.TextMessage, data: message}:
 		c.logger.Info("成功恢复订阅")
+	case <-time.After(5 * time.Second):
+		c.logger.Error("发送订阅消息超时")
 	}
 }
 
