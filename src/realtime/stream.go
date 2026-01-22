@@ -377,6 +377,12 @@ func (s *Stream) readLoop() {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			s.logger.Warn("WebSocket 读取错误: %v", err)
+			// 检查是否是主动关闭（done 通道已关闭）- 避免触发不必要的重连
+			select {
+			case <-s.done:
+				return // 主动关闭，不重连
+			default:
+			}
 			if s.reconnect {
 				s.handleReconnect()
 			}
@@ -548,9 +554,10 @@ func (s *Stream) resubscribe() {
 
 // Close 关闭 WebSocket 连接
 func (s *Stream) Close() error {
+	// 1. 先禁用自动重连（必须在关闭连接前设置）
 	s.reconnect = false
 
-	// 只关闭一次 done
+	// 2. 关闭 done 通道，通知所有 goroutine 退出
 	select {
 	case <-s.done:
 		// 已关闭
@@ -558,6 +565,17 @@ func (s *Stream) Close() error {
 		close(s.done)
 	}
 
+	// 3. 关闭 pingDone 通道，停止心跳循环
+	if s.pingDone != nil {
+		select {
+		case <-s.pingDone:
+			// 已关闭
+		default:
+			close(s.pingDone)
+		}
+	}
+
+	// 4. 关闭 WebSocket 连接
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
