@@ -3,8 +3,8 @@ import csv
 import os
 
 # Configuration
-LOG_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\output_20260122_2.log"
-OUTPUT_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\missed_opportunities.csv"
+LOG_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\output_20260123.log"
+OUTPUT_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\missed_opportunities_20260123.csv"
 
 # Pattern
 # 2026/01/22 19:32:48 🔍 [基准1号][sol-updown-15m-1769110200] 趋势满足(UP: 0.2262%) 但优势不足: Z=0.84 (Sigmoid价=0.778), 市场价=0.800, 优势=-0.022 (要求=0.10), 剩余732秒
