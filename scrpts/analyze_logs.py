@@ -4,8 +4,8 @@ import datetime
 import pandas as pd
 from datetime import datetime as dt, timedelta, timezone
 
-LOG_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\output_20260122_2.log"
-OUTPUT_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\trade_analysis.csv"
+LOG_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\output_20260123.log"
+OUTPUT_FILE = r"d:\Github\OtherProjects\Polymarket15MinsCryptoArbitrageTool\logs\trade_analysis_20260123.csv"
 
 # Regex Patterns
 # Trade Line: 2026/01/22 19:32:51 ✅ [💰真实][基准1号] Leg1买入成功 | 时间=19:32:48 | 市场=eth-updown-15m-1769110200 | 方向=UP | Z=0.95 | 价格=0.7800 | 数量=5.27 | 成本=$4.11 | 趋势=0.1711% | 公允价=0.8059, OrderID=...
