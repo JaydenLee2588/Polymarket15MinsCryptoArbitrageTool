@@ -42,9 +42,9 @@ groups:
     leg1_share_price_1: 0.66          # 分档买入: 价格在 (0.54, 0.66] 区间
     leg1_share_price_2: 0.78          # 分档买入: 价格在 (0.66, 0.78] 区间
     leg1_share_price_3: 0.93          # 最高买入价: 价格高于 0.93 (93美分) 不再追高
-    leg1_share_amount_1: 8            # 档位 1 的单笔买入 Share 数量
-    leg1_share_amount_2: 5            # 档位 2 的单笔买入 Share 数量
-    leg1_share_amount_3: 3            # 档位 3 的单笔买入 Share 数量
+    leg1_share_amount_1: 12            # 档位 1 的单笔买入 Share 数量
+    leg1_share_amount_2: 10            # 档位 2 的单笔买入 Share 数量
+    leg1_share_amount_3: 8            # 档位 3 的单笔买入 Share 数量
 
     # --------------------------------------------------------------------------
     # 3. 订单执行配置
@@ -58,8 +58,8 @@ groups:
     sigmoid_sensitivity: 1.5          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
     volatility_btc: 0.001             # BTC 波动率因子 (0.1%): 用于 Z-Score 分母标准化
     volatility_eth: 0.001             # ETH 波动率因子 (0.1%)
-    volatility_sol: 0.0015             # SOL 波动率因子 (0.15%)
-    volatility_xrp: 0.0015             # XRP 波动率因子 (0.15%)
+    volatility_sol: 0.0012            # SOL 波动率因子 (0.12%)
+    volatility_xrp: 0.0012            # XRP 波动率因子 (0.12%)
 
     # --------------------------------------------------------------------------
     # 5. 动态优势判定配置 (Tier System)
