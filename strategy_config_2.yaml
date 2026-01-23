@@ -1,280 +1,339 @@
 groups:
-  - id: "标准保守模式"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.05              # 最小价格优势
-    fair_price_trend_factor: 1.95     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 0: 原始基准 (作为参考锚点)
+  # ============================================================================
+  - id: "基准1号"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "勇猛1号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 1.95     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 1: 安全修正组 (收紧滑点与底线)
+  # 目的: 验证降低滑点和 Tier4 必须有优势是否能减少回撤
+  # ============================================================================
+  - id: "对照组1_安全修正"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.02          # 变化点: 0.05 -> 0.02 (严格防滑点)
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.01      # 变化点: 0.00 -> 0.01 (留1分钱活路)
 
-  - id: "勇猛2号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001     # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 1.95     # 趋势到公允价的转换系数
-    trend_window_sec_start: 88        # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 720         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 2: 高波动率阈值组 (过滤噪音)
+  # 目的: 验证当前是否把微小波动当成了信号。如果此组胜率高，说明基准组太敏感。
+  # ============================================================================
+  - id: "对照组2_高波动率"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0025      # 变化点: 提高约 60%
+    volatility_eth: 0.0035      # 变化点: 提高约 75%
+    volatility_sol: 0.0050      # 变化点: 提高约 60%
+    volatility_xrp: 0.0060      # 变化点: 提高约 50%
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "勇猛3号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001     # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 1.8     # 趋势到公允价的转换系数
-    trend_window_sec_start: 88        # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 720         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 3: 高敏感度组 (激进模型)
+  # 目的: 测试是否因为太保守错过了大行情。K值调大，S曲线更陡。
+  # ============================================================================
+  - id: "对照组3_高敏感度"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.8    # 变化点: 1.5 -> 1.8 (更容易得出极端概率)
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "勇猛4号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001     # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 2.1     # 趋势到公允价的转换系数
-    trend_window_sec_start: 88        # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 720         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 4: 长窗口组 (交易到第12分钟)
+  # 目的: 测试最后2分钟的 Gamma 风险是否值得冒。
+  # ============================================================================
+  - id: "对照组4_长窗口"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 720   # 变化点: 600s(10m) -> 720s(12m)
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "勇猛5号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001     # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 2.1     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118        # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 5: 早鸟组 (提前入场)
+  # 目的: 测试开盘第 1 分钟的行情是否稳定。
+  # ============================================================================
+  - id: "对照组5_早鸟"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 60  # 变化点: 125s -> 60s (1分钟后就开始交易)
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "勇猛6号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.001       # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.001     # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.02              # 最小价格优势
-    fair_price_trend_factor: 1.8      # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 6: 均注组 (固定手数)
+  # 目的: 测试风险平价(8-5-3)是否真的优于固定手数(5-5-5)。
+  # ============================================================================
+  - id: "对照组6_均注"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 5      # 变化点: 均注
+    leg1_share_amount_2: 5      # 变化点: 均注
+    leg1_share_amount_3: 5      # 变化点: 均注
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "保守1号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 1.95     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 7: 高胜率重仓组 (倒金字塔)
+  # 目的: 测试"越确信买越多"的逻辑。如果此组大赚，说明模型在高价区(>0.78)非常准。
+  # ============================================================================
+  - id: "对照组7_确信重仓"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 3      # 变化点: 试探单少买
+    leg1_share_amount_2: 5      # 变化点: 中等
+    leg1_share_amount_3: 8      # 变化点: 确信单重注
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.13
+    min_edge_tier_1: 0.10
+    min_edge_tier_2: 0.06
+    min_edge_tier_3: 0.03
+    min_edge_tier_4: 0.00
 
-  - id: "保守2号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 1.8     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 8: 贪婪报价组 (高 Edge 要求)
+  # 目的: 牺牲成交量换取盈亏比。所有层级都要求更多便宜。
+  # ============================================================================
+  - id: "对照组8_贪婪报价"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.15      # 变化点: +0.02
+    min_edge_tier_1: 0.12      # 变化点: +0.02
+    min_edge_tier_2: 0.08      # 变化点: +0.02
+    min_edge_tier_3: 0.05      # 变化点: +0.02
+    min_edge_tier_4: 0.02      # 变化点: +0.02
 
-  - id: "保守3号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 2.1     # 趋势到公允价的转换系数
-    trend_window_sec_start: 118       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 450         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
-
-  - id: "保守4号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 1.8      # 趋势到公允价的转换系数
-    trend_window_sec_start: 125       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 285         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
-
-  - id: "保守5号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 2.1     # 趋势到公允价的转换系数
-    trend_window_sec_start: 125       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 285         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
-
-  - id: "保守6号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 1.8      # 趋势到公允价的转换系数
-    trend_window_sec_start: 125       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 600         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
-
-  - id: "保守7号"
-    # Binance 趋势检测
-    min_trend_percent_up: 0.0015      # 做多最小趋势阈值 (0.1%)
-    min_trend_percent_down: 0.0015    # 做空最小趋势阈值 (0.15%)
-    min_price_edge: 0.07              # 最小价格优势
-    fair_price_trend_factor: 2.1     # 趋势到公允价的转换系数
-    trend_window_sec_start: 125       # 开盘后多少秒开始检测 (接近1分钟半)
-    trend_window_sec_end: 600         # 开盘后多少秒停止检测 (6分钟)
-    # 动态 Share 配置 (基于入场价格)
-    leg0_share_price_0: 0.01          # 最低价格阈值 (低于此不买)
-    leg1_share_price_1: 0.66          # 第一价格阈值
-    leg1_share_price_2: 0.78          # 第二价格阈值  
-    leg1_share_price_3: 0.90          # 第三价格阈值 (高于此不买)
-    leg1_share_amount_1: 1            # 价格在 (0.54, 0.66] 买入数量
-    leg1_share_amount_2: 1            # 价格在 (0.66, 0.78] 买入数量
-    leg1_share_amount_3: 1            # 价格在 (0.78, 0.90] 买入数量
-    # 滑点配置 (用于 FAK/FOK 订单类型)
-    max_slippage: 0.05                # 最大滑点 (5 美分)
-    price_tick_size: 0.01             # 最小价格单位 (1 美分)
+  # ============================================================================
+  # group 9: 宽松过滤组 (低 Edge 要求)
+  # 目的: 测试是否因为过滤太严错过了赚钱机会。降低要求，看手续费会不会吃光利润。
+  # ============================================================================
+  - id: "对照组9_宽松过滤"
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 125
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.66
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 8
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 3
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5
+    volatility_btc: 0.0015
+    volatility_eth: 0.002
+    volatility_sol: 0.003
+    volatility_xrp: 0.004
+    tier_0_z_score: 0.4
+    tier_1_z_score: 0.6
+    tier_2_z_score: 0.9
+    tier_3_z_score: 1.3
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.10      # 变化点: -0.03
+    min_edge_tier_1: 0.07      # 变化点: -0.03
+    min_edge_tier_2: 0.03      # 变化点: -0.03
+    min_edge_tier_3: 0.01      # 变化点: -0.02
+    min_edge_tier_4: 0.00      # 保持 0

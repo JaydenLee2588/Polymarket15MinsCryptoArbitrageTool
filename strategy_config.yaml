@@ -41,7 +41,7 @@ groups:
     leg0_share_price_0: 0.01          # 保护性低价: 价格低于 1美分不买 (避免垃圾归零单)
     leg1_share_price_1: 0.66          # 分档买入: 价格在 (0.54, 0.66] 区间
     leg1_share_price_2: 0.78          # 分档买入: 价格在 (0.66, 0.78] 区间
-    leg1_share_price_3: 0.85          # 最高买入价: 价格高于 0.85 (85美分) 不再追高
+    leg1_share_price_3: 0.87          # 最高买入价: 价格高于 0.87 (87美分) 不再追高
     leg1_share_amount_1: 8            # 档位 1 的单笔买入 Share 数量
     leg1_share_amount_2: 5            # 档位 2 的单笔买入 Share 数量
     leg1_share_amount_3: 3            # 档位 3 的单笔买入 Share 数量
