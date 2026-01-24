@@ -51,6 +51,36 @@ groups:
     min_edge_tier_3: 0.00     # Z [1.4, 2.0): 信号很强，要求微小优势 (3美分)
     min_edge_tier_4: 0.00     # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单
 
+  - id: "对照18_看图说话"
+    min_trend_percent_up: 0.001
+    min_trend_percent_down: 0.001
+    trend_window_sec_start: 450
+    trend_window_sec_end: 850
+    leg0_share_price_0: 0.60
+    leg1_share_price_1: 0.70
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.90
+    leg1_share_amount_1: 11
+    leg1_share_amount_2: 10
+    leg1_share_amount_3: 9
+    max_slippage: 0.06
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 2.2
+    volatility_btc: 0.0015
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0015
+    tier_0_z_score: 1.1 # 变化
+    tier_1_z_score: 1.4 # 变化
+    tier_2_z_score: 1.7 # 变化
+    tier_3_z_score: 2.0 # 变化
+    tier_4_z_score: 2.5 # 变化
+    min_edge_tier_0: 0.08
+    min_edge_tier_1: 0.05
+    min_edge_tier_2: 0.04
+    min_edge_tier_3: 0.01
+    min_edge_tier_4: 0.00
+
   - id: "对照17"
     min_trend_percent_up: 0.001
     min_trend_percent_down: 0.001
