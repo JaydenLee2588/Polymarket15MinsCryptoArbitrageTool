@@ -89,16 +89,16 @@ type configGroupYAML struct {
 	VolatilitySOL      float64 `yaml:"volatility_sol"`
 	VolatilityXRP      float64 `yaml:"volatility_xrp"`
 	// 动态优势配置
-	Tier0ZScore  float64 `yaml:"tier_0_z_score"`
-	Tier1ZScore  float64 `yaml:"tier_1_z_score"`
-	Tier2ZScore  float64 `yaml:"tier_2_z_score"`
-	Tier3ZScore  float64 `yaml:"tier_3_z_score"`
-	Tier4ZScore  float64 `yaml:"tier_4_z_score"`
-	MinEdgeTier0 float64 `yaml:"min_edge_tier_0"`
-	MinEdgeTier1 float64 `yaml:"min_edge_tier_1"`
-	MinEdgeTier2 float64 `yaml:"min_edge_tier_2"`
-	MinEdgeTier3 float64 `yaml:"min_edge_tier_3"`
-	MinEdgeTier4 float64 `yaml:"min_edge_tier_4"`
+	Tier0ZScore  float64  `yaml:"tier_0_z_score"`
+	Tier1ZScore  float64  `yaml:"tier_1_z_score"`
+	Tier2ZScore  float64  `yaml:"tier_2_z_score"`
+	Tier3ZScore  float64  `yaml:"tier_3_z_score"`
+	Tier4ZScore  float64  `yaml:"tier_4_z_score"`
+	MinEdgeTier0 *float64 `yaml:"min_edge_tier_0"`
+	MinEdgeTier1 *float64 `yaml:"min_edge_tier_1"`
+	MinEdgeTier2 *float64 `yaml:"min_edge_tier_2"`
+	MinEdgeTier3 *float64 `yaml:"min_edge_tier_3"`
+	MinEdgeTier4 *float64 `yaml:"min_edge_tier_4"`
 }
 
 type configFileYAML struct {
@@ -183,16 +183,16 @@ func LoadConfigsFromYAML(filename string, defaultConfig StrategyConfig) ([]Strat
 			VolatilitySOL:      valueOrDefault(g.VolatilitySOL, 0.003),    // SOL 默认波动率
 			VolatilityXRP:      valueOrDefault(g.VolatilityXRP, 0.004),    // XRP 默认波动率
 			// 动态优势配置
-			Tier0ZScore:  valueOrDefault(g.Tier0ZScore, 0.5),   // 默认 0.5
-			Tier1ZScore:  valueOrDefault(g.Tier1ZScore, 0.8),   // 默认 0.8
-			Tier2ZScore:  valueOrDefault(g.Tier2ZScore, 1.0),   // 默认 1.0
-			Tier3ZScore:  valueOrDefault(g.Tier3ZScore, 1.5),   // 默认 1.5
-			Tier4ZScore:  valueOrDefault(g.Tier4ZScore, 2.0),   // 默认 2.0
-			MinEdgeTier0: valueOrDefault(g.MinEdgeTier0, 0.08), // [Tier0, Tier1]
-			MinEdgeTier1: valueOrDefault(g.MinEdgeTier1, 0.06), // [Tier1, Tier2]
-			MinEdgeTier2: valueOrDefault(g.MinEdgeTier2, 0.03), // [Tier2, Tier3]
-			MinEdgeTier3: valueOrDefault(g.MinEdgeTier3, 0.01), // [Tier3, Tier4]
-			MinEdgeTier4: valueOrDefault(g.MinEdgeTier4, 0.00), // [Tier4, +∞]
+			Tier0ZScore:  valueOrDefault(g.Tier0ZScore, 0.5),      // 默认 0.5
+			Tier1ZScore:  valueOrDefault(g.Tier1ZScore, 0.8),      // 默认 0.8
+			Tier2ZScore:  valueOrDefault(g.Tier2ZScore, 1.0),      // 默认 1.0
+			Tier3ZScore:  valueOrDefault(g.Tier3ZScore, 1.5),      // 默认 1.5
+			Tier4ZScore:  valueOrDefault(g.Tier4ZScore, 2.0),      // 默认 2.0
+			MinEdgeTier0: valueOrDefaultPtr(g.MinEdgeTier0, 0.08), // [Tier0, Tier1]
+			MinEdgeTier1: valueOrDefaultPtr(g.MinEdgeTier1, 0.06), // [Tier1, Tier2]
+			MinEdgeTier2: valueOrDefaultPtr(g.MinEdgeTier2, 0.03), // [Tier2, Tier3]
+			MinEdgeTier3: valueOrDefaultPtr(g.MinEdgeTier3, 0.01), // [Tier3, Tier4]
+			MinEdgeTier4: valueOrDefaultPtr(g.MinEdgeTier4, 0.00), // [Tier4, +∞]
 			TradingMode:  tradingMode,
 			OrderType:    orderType,
 		}
@@ -205,6 +205,13 @@ func LoadConfigsFromYAML(filename string, defaultConfig StrategyConfig) ([]Strat
 func valueOrDefault(val, defaultVal float64) float64 {
 	if val != 0 {
 		return val
+	}
+	return defaultVal
+}
+
+func valueOrDefaultPtr(val *float64, defaultVal float64) float64 {
+	if val != nil {
+		return *val
 	}
 	return defaultVal
 }
