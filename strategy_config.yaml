@@ -39,13 +39,13 @@ groups:
     # --------------------------------------------------------------------------
     # 2. 资金管理与买入限制
     # --------------------------------------------------------------------------
-    leg0_share_price_0: 0.65          # 保护性低价: 价格低于 1美分不买 (避免垃圾归零单)
+    leg0_share_price_0: 0.63          # 保护性低价: 价格低于 0.63美分不买 (避免垃圾归零单)
     leg1_share_price_1: 0.75          # 分档买入: 价格在 (0.54, 0.66] 区间
     leg1_share_price_2: 0.84          # 分档买入: 价格在 (0.66, 0.78] 区间  
     leg1_share_price_3: 0.93          # 最高买入价: 价格高于 0.96 (96美分) 不再追高
-    leg1_share_amount_1: 57           # 档位 1 的单笔买入 Share 数量
-    leg1_share_amount_2: 51           # 档位 2 的单笔买入 Share 数量
-    leg1_share_amount_3: 44            # 档位 3 的单笔买入 Share 数量
+    leg1_share_amount_1: 28           # 档位 1 的单笔买入 Share 数量
+    leg1_share_amount_2: 25           # 档位 2 的单笔买入 Share 数量
+    leg1_share_amount_3: 22           # 档位 3 的单笔买入 Share 数量
 
     # --------------------------------------------------------------------------
     # 3. 订单执行配置
@@ -78,3 +78,37 @@ groups:
     min_edge_tier_2: 0.00     # Z [1.0, 1.4): 信号较强，要求中等优势 (6美分)
     min_edge_tier_3: 0.00     # Z [1.4, 2.0): 信号很强，要求微小优势 (3美分)
     min_edge_tier_4: 0.00     # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单一
+
+  - id: "强趋势突破"
+    # 策略思路: 价格行为 (Price Action) 优先。不依赖时间窗口或低价，而是依赖“大幅度的趋势形态”。
+    # 核心逻辑: 设置极高的趋势阈值 (0.25%)，过滤掉所有震荡和噪音。一旦检测到强力突破信号 (Breakout)，大幅降低 Z-score 和 Edge 门槛，立即跟随趋势进场。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0025      # [对比] 极高阈值 (0.25%)，只做大行情
+    min_trend_percent_down: 0.0025    # [对比]
+    trend_window_sec_start: 150       # [对比] 只要趋势出来，可以很早进场
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.51          # [对比] 低价位
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.85          # [对比] 允许较高位置追突破
+    leg1_share_price_3: 0.97          # [对比] 接近满值也追
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 50
+    leg1_share_amount_3: 50
+    max_slippage: 0.05                # 突破行情波动大，稍宽滑点
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 2.2          # [对比] 高K值，一旦突破，S曲线迅速拉升
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    # Tier: 趋势已经确认，Z的要求可以降低
+    tier_0_z_score: 0.8       # [对比] 只要Z > 0.8 就进 (因为有强趋势背书)
+    tier_1_z_score: 1.0
+    tier_2_z_score: 1.2
+    tier_3_z_score: 1.4
+    tier_4_z_score: 1.8
+    min_edge_tier_0: 0.01     # [对比] 只要微弱优势即可
+    min_edge_tier_1: 0.00     # 平价即可
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
