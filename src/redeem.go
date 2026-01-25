@@ -452,9 +452,13 @@ func (r *Redeemer) getRelayPayload(ctx context.Context) (*RelayPayloadResolved, 
 		return nil, fmt.Errorf("解析响应失败: %w, body: %s", err, string(body))
 	}
 
+	if string(payload.Nonce) == "" {
+		return nil, fmt.Errorf("收到空的 nonce, 完整响应: %s", string(body))
+	}
+
 	nonce, err := payload.Nonce.Int64()
 	if err != nil {
-		return nil, fmt.Errorf("无效的 nonce 格式: %w", err)
+		return nil, fmt.Errorf("无效的 nonce 格式: %w, 完整响应: %s", err, string(body))
 	}
 
 	return &RelayPayloadResolved{
