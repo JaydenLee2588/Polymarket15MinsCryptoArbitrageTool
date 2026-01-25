@@ -1274,7 +1274,7 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	}
 
 	// 检查价格范围
-	if price <= config.Leg0SharePrice0 {
+	if price < config.Leg0SharePrice0 {
 		log.Printf("⚠️ [%s][%s] %s 价格 %.3f 低于阈值 %.2f，跳过", state.ConfigGroup, state.Slug, targetSide, price, config.Leg0SharePrice0)
 		return
 	}
