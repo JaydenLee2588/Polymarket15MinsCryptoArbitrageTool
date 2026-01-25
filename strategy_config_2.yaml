@@ -3,36 +3,36 @@ groups:
     # --------------------------------------------------------------------------
     # 1. Binance 趋势检测参数
     # --------------------------------------------------------------------------
-    min_trend_percent_up: 0.001      # 做多最小趋势阈值 (0.1%)，只有涨幅超过此值才开始计算
-    min_trend_percent_down: 0.001    # 做空最小趋势阈值 (0.1%)，只有跌幅超过此值才开始计算
+    min_trend_percent_up: 0.0013      # 做多最小趋势阈值 (0.1%)，只有涨幅超过此值才开始计算
+    min_trend_percent_down: 0.0013    # 做空最小趋势阈值 (0.1%)，只有跌幅超过此值才开始计算
     trend_window_sec_start: 350      # 趋势检测窗口起点: 开盘后 350秒 (约5分钟) 开始
-    trend_window_sec_end: 450        # 趋势检测窗口终点: 开盘后 450秒 (7.5分钟) 停止检测
+    trend_window_sec_end: 480        # 趋势检测窗口终点: 开盘后 450秒 (7.5分钟) 停止检测
 
     # --------------------------------------------------------------------------
     # 2. 资金管理与买入限制
     # --------------------------------------------------------------------------
-    leg0_share_price_0: 0.60          # 保护性低价: 价格低于 1美分不买 (避免垃圾归零单)
-    leg1_share_price_1: 0.70          # 分档买入: 价格在 (0.54, 0.66] 区间
-    leg1_share_price_2: 0.78          # 分档买入: 价格在 (0.66, 0.78] 区间  
-    leg1_share_price_3: 0.9          # 最高买入价: 价格高于 0.93 (93美分) 不再追高
-    leg1_share_amount_1: 11           # 档位 1 的单笔买入 Share 数量
-    leg1_share_amount_2: 10           # 档位 2 的单笔买入 Share 数量
-    leg1_share_amount_3: 9            # 档位 3 的单笔买入 Share 数量
+    leg0_share_price_0: 0.61          # 保护性低价: 价格低于 1美分不买 (避免垃圾归零单)
+    leg1_share_price_1: 0.71          # 分档买入: 价格在 (0.54, 0.66] 区间
+    leg1_share_price_2: 0.80          # 分档买入: 价格在 (0.66, 0.78] 区间  
+    leg1_share_price_3: 0.96          # 最高买入价: 价格高于 0.96 (96美分) 不再追高
+    leg1_share_amount_1: 57           # 档位 1 的单笔买入 Share 数量
+    leg1_share_amount_2: 51           # 档位 2 的单笔买入 Share 数量
+    leg1_share_amount_3: 44            # 档位 3 的单笔买入 Share 数量
 
     # --------------------------------------------------------------------------
     # 3. 订单执行配置
     # --------------------------------------------------------------------------
-    max_slippage: 0.06                # 最大允许滑点 (单位: 美元)，用于 Taker 吃单保护
+    max_slippage: 0.04                # 最大允许滑点 (单位: 美元)，用于 Taker 吃单保护
     price_tick_size: 0.01             # 交易所最小价格变动单位 (1美分)
 
     # --------------------------------------------------------------------------
     # 4. Sigmoid 公允价模型参数
     # --------------------------------------------------------------------------
-    sigmoid_sensitivity: 1.5          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
-    volatility_btc: 0.0015             # BTC 波动率因子 (0.15%): 用于 Z-Score 分母标准化
+    sigmoid_sensitivity: 1.7          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
+    volatility_btc: 0.0012             # BTC 波动率因子 (0.15%): 用于 Z-Score 分母标准化
     volatility_eth: 0.0012             # ETH 波动率因子 (0.12%)
-    volatility_sol: 0.0012            # SOL 波动率因子 (0.12%)
-    volatility_xrp: 0.0015            # XRP 波动率因子 (0.15%)
+    volatility_sol: 0.0012             # SOL 波动率因子 (0.12%)
+    volatility_xrp: 0.0012             # XRP 波动率因子 (0.15%)
 
     # --------------------------------------------------------------------------
     # 5. 动态优势判定配置 (Tier System)
@@ -49,324 +49,645 @@ groups:
     min_edge_tier_1: 0.01     # Z [0.8, 1.0): 信号一般，要求较大优势 (10美分)
     min_edge_tier_2: 0.00     # Z [1.0, 1.4): 信号较强，要求中等优势 (6美分)
     min_edge_tier_3: 0.00     # Z [1.4, 2.0): 信号很强，要求微小优势 (3美分)
-    min_edge_tier_4: 0.00     # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单
+    min_edge_tier_4: 0.00     # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单一
 
-  - id: "对照18_看图说话"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 450
-    trend_window_sec_end: 850
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
+  - id: "对比1-早盘"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 200 # 变化
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
     price_tick_size: 0.01
-    sigmoid_sensitivity: 2.2
-    volatility_btc: 0.0015
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
     volatility_eth: 0.0012
     volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 1.1 # 变化
-    tier_1_z_score: 1.4 # 变化
-    tier_2_z_score: 1.7 # 变化
-    tier_3_z_score: 2.0 # 变化
-    tier_4_z_score: 2.5 # 变化
-    min_edge_tier_0: 0.08
-    min_edge_tier_1: 0.05
-    min_edge_tier_2: 0.04
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比2-长尾盘"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 660 # 变化
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比3-降低阈值"
+    min_trend_percent_up: 0.0003 # 变化
+    min_trend_percent_down: 0.0003 # 变化
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比4-多购1"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 2.0 # 变化
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比5-少购1"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.4 # 变化
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比6-多购2"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0008 # 变化
+    volatility_eth: 0.0008 # 变化
+    volatility_sol: 0.0008 # 变化
+    volatility_xrp: 0.0008 # 变化
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比7-少购2"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0016 # 变化
+    volatility_eth: 0.0016 # 变化
+    volatility_sol: 0.0016 # 变化
+    volatility_xrp: 0.0016 # 变化
+    tier_0_z_score: 1.2
+    tier_1_z_score: 1.3
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.7
+    tier_4_z_score: 2.0
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比8-高阈值"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 1.5 # 变化
+    tier_1_z_score: 1.7 # 变化
+    tier_2_z_score: 1.9 # 变化
+    tier_3_z_score: 2.1 # 变化
+    tier_4_z_score: 2.4 # 变化
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "对比9-低阈值"
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+    max_slippage: 0.04
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 0.7 # 变化
+    tier_1_z_score: 0.8 # 变化
+    tier_2_z_score: 1.1 # 变化
+    tier_3_z_score: 1.3 # 变化
+    tier_4_z_score: 1.6 # 变化
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "全面对比1-激进早盘"
+    # 策略思路: 降低准入门槛，提前进场，抢占先机，但容忍更低胜率。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0008      # 降低: 0.13% -> 0.08%，更早捕捉微弱趋势
+    min_trend_percent_down: 0.0008    # 降低: 0.13% -> 0.08%
+    trend_window_sec_start: 200       # 提前: 350s -> 200s (3分20秒)，不做过多等待
+    trend_window_sec_end: 450         # 提前结束: 450s
+    # 资金: 略微激进
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.73          # 提高: 允许稍高价格买入
+    leg1_share_price_2: 0.82          # [对比] 提高: 允许稍高价格买入
+    leg1_share_price_3: 0.97          # [对比] 提高: 几乎接近归一价，敢于追高
+    leg1_share_amount_1: 60           # [对比] 增加: 头寸稍大
+    leg1_share_amount_2: 55
+    leg1_share_amount_3: 45
+    max_slippage: 0.05                # [对比] 放宽: 允许更大滑点抢单
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.9          # [对比] 提高: 对趋势更敏感，S曲线更陡
+    volatility_btc: 0.0012            # 保持一致
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    # Tier: 整体下移，更容易触发
+    tier_0_z_score: 0.9       # [对比] 降低: 1.2 -> 0.9，极早触发
+    tier_1_z_score: 1.1       # [对比] 降低
+    tier_2_z_score: 1.3
+    tier_3_z_score: 1.5
+    tier_4_z_score: 1.8
+    min_edge_tier_0: 0.02     # [对比] 降低优势要求，只求上车
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: -0.01    # [对比] 甚至允许微亏买入(负优势)，赌后续涨幅
+
+  - id: "全面对比2-保守确认"
+    # 策略思路: 只要最稳的单子，过滤噪音，大幅提高门槛。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0020      # 提高: 0.13% -> 0.20%，必须有显著趋势
+    min_trend_percent_down: 0.0020    # 提高
+    trend_window_sec_start: 450       # 推后: 350s -> 450s，等待趋势完全成型
+    trend_window_sec_end: 700         # 延长窗口
+    # 资金: 保守低吸
+    leg0_share_price_0: 0.55          # 降低: 只买便宜货
+    leg1_share_price_1: 0.65          # 收窄区间
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.85          # [对比] 拒绝追高
+    leg1_share_amount_1: 50           # 正常仓位
+    leg1_share_amount_2: 45
+    leg1_share_amount_3: 40
+    max_slippage: 0.02                # [对比] 收紧: 不接受大滑点
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.5          # [对比] 降低: 反应迟钝一点，过滤毛刺
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    # Tier: 整体上移，极难触发
+    tier_0_z_score: 1.5       # [对比] 提高: 1.5起步
+    tier_1_z_score: 1.7
+    tier_2_z_score: 2.0
+    tier_3_z_score: 2.3
+    tier_4_z_score: 2.6
+    min_edge_tier_0: 0.05     # [对比] 要求巨大安全垫 (5美分)
+    min_edge_tier_1: 0.03
+    min_edge_tier_2: 0.02
     min_edge_tier_3: 0.01
     min_edge_tier_4: 0.00
 
-  - id: "对照17"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 550 # 变化
+  - id: "全面对比3-高波博弈"
+    # 策略思路: 针对高波动行情，放宽波动率因子，寻找深跌反弹或暴涨机会。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 300
+    trend_window_sec_end: 550         # 略微放大
+    # 资金: 广撒网
     leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
+    leg1_share_price_1: 0.65
+    leg1_share_price_2: 0.85
+    leg1_share_price_3: 0.98          # 波动大可能瞬间拉满
+    leg1_share_amount_1: 40           # 单笔小一点，分批
+    leg1_share_amount_2: 40
+    leg1_share_amount_3: 40
+    max_slippage: 0.06                # [对比] 容忍高滑点
     price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.0015
+    sigmoid_sensitivity: 1.2          # [对比] 极低敏感度(S曲线平缓)，因为Z分数会很大
+    volatility_btc: 0.0025            # [对比] 假设波动率翻倍
+    volatility_eth: 0.0025
+    volatility_sol: 0.0025
+    volatility_xrp: 0.0025
+    # Tier: 适应高波动率分母
+    tier_0_z_score: 1.0       # 调整后的Z
+    tier_1_z_score: 1.2
+    tier_2_z_score: 1.5
+    tier_3_z_score: 1.8
+    tier_4_z_score: 2.2
+    min_edge_tier_0: 0.04     # 波动大，spread也大，要求高edge
+    min_edge_tier_1: 0.02
+    min_edge_tier_2: 0.01
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: -0.02    # 极高Z时敢于taker吃损
+
+  - id: "全面对比4-微利刷单"
+    # 策略思路: 积少成多，极低门槛，极低利润要求，高频。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0005      # [对比] 极微小趋势即可
+    min_trend_percent_down: 0.0005
+    trend_window_sec_start: 180      # 开盘即战
+    trend_window_sec_end: 600        # 全程
+    leg0_share_price_0: 0.70          # [对比] 只做高价区(流动性好)
+    leg1_share_price_1: 0.80
+    leg1_share_price_2: 0.90
+    leg1_share_price_3: 0.99
+    leg1_share_amount_1: 20           # [对比] 单笔很少，旨在测试/刷单
+    leg1_share_amount_2: 20
+    leg1_share_amount_3: 20
+    max_slippage: 0.01                # [对比] 严控滑点
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 2.5          # [对比] 极其敏感
+    volatility_btc: 0.0010            # 低波环境
+    volatility_eth: 0.0010
+    volatility_sol: 0.0010
+    volatility_xrp: 0.0010
+    tier_0_z_score: 0.6       # [对比] 稍微有点信号就做
+    tier_1_z_score: 0.8
+    tier_2_z_score: 1.0
+    tier_3_z_score: 1.2
+    tier_4_z_score: 1.5
+    min_edge_tier_0: 0.01     # 只要有1分钱利差就做
+    min_edge_tier_1: 0.00     # 平价也做
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "全面对比5-尾盘伽马"
+    # 策略思路: 放弃前中期的趋势博弈，专攻最后 3 分钟 (如 600s-800s)。
+    # 核心逻辑: 利用时间流逝导致的 Gamma 效应（时间越少，同等涨幅的确定性越高）。此时Z-score极容易飙升，胜率极高，专捡确定性的“临门一脚”行情。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 600      # [对比] 尾盘启动
+    trend_window_sec_end: 800        # [对比] 
+    
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+
+    max_slippage: 0.04
+    price_tick_size: 0.01
+
+    sigmoid_sensitivity: 2.5          # [对比] 极高敏感度
+    volatility_btc: 0.0012
     volatility_eth: 0.0012
     volatility_sol: 0.0012
-    volatility_xrp: 0.0015
+    volatility_xrp: 0.0012
+
     tier_0_z_score: 1.2
     tier_1_z_score: 1.3
     tier_2_z_score: 1.5
     tier_3_z_score: 1.7
     tier_4_z_score: 2.0
+    
     min_edge_tier_0: 0.03
     min_edge_tier_1: 0.01
     min_edge_tier_2: 0.00
     min_edge_tier_3: 0.00
     min_edge_tier_4: 0.00
 
-  - id: "对照16"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
+  - id: "全面对比6-深度抄底 (Deep Value / Asymmetric Payoff)"
+    # 策略思路: 逆势思维，拒绝追高，专做低价区的极限反弹。
+    # 核心逻辑: 只允许在极低价位 (如 0.30 - 0.60) 建仓，并要求极大的 Z-score 和 Edge。胜率可能只有 40%，但一旦成功，单笔盈亏比 (R/R) 极高，以小博大。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0020      # 要求明确趋势
+    min_trend_percent_down: 0.0020
     trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.97 # 变化
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
+    trend_window_sec_end: 600
+    
+    leg0_share_price_0: 0.30          # [对比] 极低价格区间
+    leg1_share_price_1: 0.45
+    leg1_share_price_2: 0.55
+    leg1_share_price_3: 0.63          # [对比] 0.63以上不买
+    leg1_share_amount_1: 70           # [对比] 便宜多买
+    leg1_share_amount_2: 60
+    leg1_share_amount_3: 50
+
+    max_slippage: 0.07
     price_tick_size: 0.01
+
     sigmoid_sensitivity: 1.5
-    volatility_btc: 0.0015
+    volatility_btc: 0.0012
     volatility_eth: 0.0012
     volatility_sol: 0.0012
-    volatility_xrp: 0.0015
+    volatility_xrp: 0.0012
+
+    # Tier: 要求高Z才动手
+    tier_0_z_score: 1.5       # [对比] 门槛极高
+    tier_1_z_score: 2.0
+    tier_2_z_score: 2.2
+    tier_3_z_score: 2.5
+    tier_4_z_score: 3.0
+    
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.02
+    min_edge_tier_2: 0.01
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "全面对比7-动能吞噬"
+    # 策略思路: 趋势跟随的终极形态，不在乎买入成本，只要能上车。
+    # 核心逻辑: 大幅放开滑点限制 (如 max_slippage: 0.10) 和 0 Edge 要求。针对爆发性极强的单边行情（瞬间拉升），不管流动性多差，强行吃透订单簿抢筹码。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 300
+    trend_window_sec_end: 600
+    
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.80
+    leg1_share_price_2: 0.90
+    leg1_share_price_3: 0.98          # [对比] 追高至0.98
+    leg1_share_amount_1: 57
+    leg1_share_amount_2: 51
+    leg1_share_amount_3: 44
+
+    max_slippage: 0.10                # [对比] 巨大滑点容忍
+    price_tick_size: 0.01
+
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+
+    tier_0_z_score: 1.0       # 有信号就行
+    tier_1_z_score: 1.2
+    tier_2_z_score: 1.4
+    tier_3_z_score: 1.6
+    tier_4_z_score: 1.8
+    
+    min_edge_tier_0: 0.00     # [对比] 0 Edge
+    min_edge_tier_1: 0.00
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "全面对比8-凯利重仓"
+    # 策略思路: “好钢用在刀刃上”，摒弃平均主义，倒金字塔加仓。
+    # 核心逻辑: 彻底关闭 Tier 0 和 Tier 1 的交易，只在 Tier 3 和 Tier 4 (Z-score > 1.5) 的极高确信度下开火，并且此时投入 3-5 倍的重仓（如单次买 150 手），用确定性换取绝对利润。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.96
+    
+    # [对比] 重仓
+    leg1_share_amount_1: 150          # 3倍于常态
+    leg1_share_amount_2: 150
+    leg1_share_amount_3: 150
+
+    max_slippage: 0.04
+    price_tick_size: 0.01
+
+    sigmoid_sensitivity: 1.7
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+
+    # [对比] 关闭低Tier (设置为极高值)
+    tier_0_z_score: 9.9
+    tier_1_z_score: 9.9
+    tier_2_z_score: 9.9       # 前三档不做
+    tier_3_z_score: 1.5       # 从这里开始
+    tier_4_z_score: 2.0
+    
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.01
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "全面对比9-中位狙击"
+    # 策略思路: 避开低价区的随机噪音和高价区的接盘风险，专做概率跃迁最快的中间段。
+    # 核心逻辑: 将买入价格严格锁死在 Sigmoid 函数斜率最陡峭的区间（如 0.65 - 0.75）。在这个区间，哪怕市场只涨 0.1%，期权价格也会剧烈重估，套利空间最大。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0013
+    min_trend_percent_down: 0.0013
+    trend_window_sec_start: 350
+    trend_window_sec_end: 480
+    
+    # [对比] 窄区间
+    leg0_share_price_0: 0.64          
+    leg1_share_price_1: 0.65          # 0.65 - 0.75 是核心区
+    leg1_share_price_2: 0.70
+    leg1_share_price_3: 0.75          # 超过 0.75 不买
+
+    leg1_share_amount_1: 60
+    leg1_share_amount_2: 60
+    leg1_share_amount_3: 60
+
+    max_slippage: 0.03
+    price_tick_size: 0.01
+
+    sigmoid_sensitivity: 2.0          # 配合中位区，稍高敏感
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+
     tier_0_z_score: 1.2
     tier_1_z_score: 1.3
     tier_2_z_score: 1.5
     tier_3_z_score: 1.7
     tier_4_z_score: 2.0
+    
     min_edge_tier_0: 0.03
     min_edge_tier_1: 0.01
     min_edge_tier_2: 0.00
     min_edge_tier_3: 0.00
     min_edge_tier_4: 0.00
 
-  - id: "对照15"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.002 # 变化
-    volatility_eth: 0.002 # 变化
-    volatility_sol: 0.002 # 变化
-    volatility_xrp: 0.002 # 变化
-    tier_0_z_score: 1.2
-    tier_1_z_score: 1.3
-    tier_2_z_score: 1.5
-    tier_3_z_score: 1.7
-    tier_4_z_score: 2.0
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
 
-  - id: "对照14"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.001 # 变化
-    volatility_eth: 0.001 # 变化
-    volatility_sol: 0.001 # 变化
-    volatility_xrp: 0.001 # 变化
-    tier_0_z_score: 1.2
-    tier_1_z_score: 1.3
-    tier_2_z_score: 1.5
-    tier_3_z_score: 1.7
-    tier_4_z_score: 2.0
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
+  - id: "全面对比10-强趋势突破"
+    # 策略思路: 价格行为 (Price Action) 优先。不依赖时间窗口或低价，而是依赖“大幅度的趋势形态”。
+    # 核心逻辑: 设置极高的趋势阈值 (0.25%)，过滤掉所有震荡和噪音。一旦检测到强力突破信号 (Breakout)，大幅降低 Z-score 和 Edge 门槛，立即跟随趋势进场。
+    # --------------------------------------------------------------------------
+    min_trend_percent_up: 0.0025      # [对比] 极高阈值 (0.25%)，只做大行情
+    min_trend_percent_down: 0.0025    # [对比]
+    trend_window_sec_start: 150      # [对比] 只要趋势出来，可以很早进场
+    trend_window_sec_end: 600
+    
+    leg0_share_price_0: 0.61
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.85          # [对比] 允许较高位置追突破
+    leg1_share_price_3: 0.97          # [对比] 接近满值也追
+    
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 50
+    leg1_share_amount_3: 50
 
-  - id: "对照13"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
+    max_slippage: 0.05                # 突破行情波动大，稍宽滑点
     price_tick_size: 0.01
-    sigmoid_sensitivity: 1.2 # 变化
-    volatility_btc: 0.0015
+
+    sigmoid_sensitivity: 2.2          # [对比] 高K值，一旦突破，S曲线迅速拉升
+    volatility_btc: 0.0012
     volatility_eth: 0.0012
     volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 1.2
-    tier_1_z_score: 1.3
-    tier_2_z_score: 1.5
-    tier_3_z_score: 1.7
-    tier_4_z_score: 2.0
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
+    volatility_xrp: 0.0012
 
-  # ============================================================================
-  # 对照9_Elite狙击基准 (当前最新优化同步)
-  # 逻辑: 将 strategy_config.yaml 中最成功的参数同步过来作为 Sim 的新基线。
-  # 验证: 350-450s 窗口 + 1.2 Z-Score 起步 + 低 Edge 要求，验证 100% 胜率的可持续性。
-  # ============================================================================
-  - id: "对照9_Elite狙击基准"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.8 # 变化
-    volatility_btc: 0.0015
-    volatility_eth: 0.0012
-    volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 1.2
-    tier_1_z_score: 1.3
-    tier_2_z_score: 1.5
-    tier_3_z_score: 1.7
-    tier_4_z_score: 2.0
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
-
-  # ============================================================================
-  # 对照10_早期捕获 (验证 300s 开打的噪音率)
-  # 逻辑: 提前 50 秒进入战场（300s）。
-  # 验证: 很多趋势在 300s 已经定型，提前进入是否会遭遇更多“假突破”回调？
-  # ============================================================================
-  - id: "对照10_早期捕获"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 300 # 变化
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.0015
-    volatility_eth: 0.0012
-    volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 1.2
-    tier_1_z_score: 1.3
-    tier_2_z_score: 1.5
-    tier_3_z_score: 1.7
-    tier_4_z_score: 2.0
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
-
-  # ============================================================================
-  # 对照11_流量之王 (下探盈利底线)
-  # 逻辑: 极度放松 Z-Score (0.8起步) 且不要求任何 Edge。
-  # 验证: 测试在 350-450s 窗口内，是否“只要有动能就能赚”，探索下单量的极限。
-  # ============================================================================
-  - id: "对照11_流量之王"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.0015
-    volatility_eth: 0.0012
-    volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 0.8 # 变化
-    tier_1_z_score: 1.0 # 变化
-    tier_2_z_score: 1.2 # 变化
-    tier_3_z_score: 1.5 # 变化
-    tier_4_z_score: 1.8 # 变化
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
-    min_edge_tier_2: 0.00
-    min_edge_tier_3: 0.00
-    min_edge_tier_4: 0.00
-
-  # ============================================================================
-  # 对照12_阿尔法高胜率狙击 (极度防守型)
-  # 逻辑: 缩短窗口（350-420s），大幅拉高 Z 门槛和 Edge 要求。
-  # 验证: 在最黄金的 70 秒内，只打那种“确定性中的确定性”，看是否能达成 0 止损。
-  # ============================================================================
-  - id: "对照12_阿尔法高胜率狙击"
-    min_trend_percent_up: 0.001
-    min_trend_percent_down: 0.001
-    trend_window_sec_start: 350
-    trend_window_sec_end: 450
-    leg0_share_price_0: 0.60
-    leg1_share_price_1: 0.70
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 11
-    leg1_share_amount_2: 10
-    leg1_share_amount_3: 9
-    max_slippage: 0.06
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 1.5
-    volatility_btc: 0.0015
-    volatility_eth: 0.0012
-    volatility_sol: 0.0012
-    volatility_xrp: 0.0015
-    tier_0_z_score: 1.4 # 变化
-    tier_1_z_score: 1.6 # 变化
-    tier_2_z_score: 1.8 # 变化
-    tier_3_z_score: 2.0 # 变化
-    tier_4_z_score: 2.5 # 变化
-    min_edge_tier_0: 0.03
-    min_edge_tier_1: 0.01
+    # Tier: 趋势已经确认，Z的要求可以降低
+    tier_0_z_score: 0.8       # [对比] 只要Z > 0.8 就进 (因为有强趋势背书)
+    tier_1_z_score: 1.0
+    tier_2_z_score: 1.2
+    tier_3_z_score: 1.4
+    tier_4_z_score: 1.8
+    
+    min_edge_tier_0: 0.01     # [对比] 只要微弱优势即可
+    min_edge_tier_1: 0.00     # 平价即可
     min_edge_tier_2: 0.00
     min_edge_tier_3: 0.00
     min_edge_tier_4: 0.00
