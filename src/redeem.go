@@ -17,6 +17,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -706,7 +707,20 @@ func (r *Redeemer) pollTransactionStatus(ctx context.Context, txID string) (stri
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	maxAttempts := 60 // 最多等待 3 分钟
+	timeoutSec := 180 // default 3 minutes
+	if val := os.Getenv("TX_WAIT_TIMEOUT_SECONDS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil && v > 0 {
+			timeoutSec = v
+		}
+	}
+
+	// ticker is 3 seconds
+	maxAttempts := timeoutSec / 3
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	log.Printf("⏳ [赎回] 开始轮询交易状态 (超时: %ds, maxAttempts: %d)", timeoutSec, maxAttempts)
+
 	attempts := 0
 
 	for {
