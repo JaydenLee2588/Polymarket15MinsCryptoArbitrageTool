@@ -2,7 +2,7 @@ groups:
   - id: "基础参考"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -32,7 +32,7 @@ groups:
   - id: "改进1号"
     min_trend_percent_up: 0.003      # 0.0025->0.003 
     min_trend_percent_down: 0.003    # 0.0025->0.003
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -62,7 +62,7 @@ groups:
   - id: "改进2号"
     min_trend_percent_up: 0.002 # 0.0025->0.002
     min_trend_percent_down: 0.002 # 0.0025->0.002
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -92,7 +92,7 @@ groups:
   - id: "改进3号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 250     # 150->250
+    trend_window_sec_start: 150     # 250->150
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -122,7 +122,7 @@ groups:
   - id: "改进4号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 360     # 480->360
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -152,7 +152,7 @@ groups:
   - id: "改进5号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 600     # 480->600
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -182,7 +182,7 @@ groups:
   - id: "改进6号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.64    # 0.51->0.64
     leg1_share_price_1: 0.72
@@ -212,7 +212,7 @@ groups:
   - id: "改进7号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -242,7 +242,7 @@ groups:
   - id: "改进8号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -272,7 +272,7 @@ groups:
   - id: "改进9号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -302,7 +302,7 @@ groups:
   - id: "改进10号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -332,7 +332,7 @@ groups:
   - id: "改进11号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -362,7 +362,7 @@ groups:
   - id: "改进12号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
@@ -392,7 +392,7 @@ groups:
   - id: "改进13号"
     min_trend_percent_up: 0.0025
     min_trend_percent_down: 0.0025
-    trend_window_sec_start: 150
+    trend_window_sec_start: 250
     trend_window_sec_end: 480
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
