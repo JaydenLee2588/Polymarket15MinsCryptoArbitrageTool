@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -1140,6 +1139,7 @@ func extractSymbol(target string) string {
 }
 
 // checkBinanceArbitrage 检查 Binance 套利机会 (Leg1)
+// 已重构：使用 EvaluateStrategy 纯函数执行策略决策，消除重复逻辑
 func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	// 已经有持仓，跳过
 	if state.Leg1Filled {
@@ -1161,15 +1161,15 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		}
 	}
 
-	// 检查时间窗口
+	// ========== 收集策略输入数据 ==========
 	now := time.Now()
 	elapsed := now.Sub(state.StartTime)
-	if elapsed.Seconds() < float64(config.TrendWindowSecStart) || elapsed.Seconds() > float64(config.TrendWindowSecEnd) {
-		// 只有在满足趋势但在时间窗口外时记录一次 (避免日志爆炸)
-		return
+	timeLeftSec := state.EndTime.Sub(now).Seconds()
+	if timeLeftSec < 0 {
+		timeLeftSec = 0
 	}
 
-	// 获取 Binance 趋势
+	// 获取 Binance K线数据
 	if binanceClient == nil {
 		return
 	}
@@ -1180,121 +1180,57 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		return
 	}
 
-	// 计算趋势
+	// ========== 调用纯策略函数 ==========
+	input := StrategyInput{
+		KlineOpen:       kline.Open,
+		KlineClose:      kline.Close,
+		MarketPrices:    state.LatestPrices, // 传入 UP/DOWN 双价格
+		ElapsedSeconds:  elapsed.Seconds(),
+		TimeLeftSeconds: timeLeftSec,
+		Symbol:          state.Symbol,
+	}
+
+	decision := EvaluateStrategy(input, config)
+
+	// ========== 处理决策结果 ==========
+	if decision.Action == "SKIP" {
+		// 根据跳过原因进行日志记录 (保持原有日志行为)
+		switch decision.Reason {
+		case "zscore_below_tier0":
+			if time.Since(state.LastEdgeLogTime) > 60*time.Second {
+				log.Printf("🔍 [%s][%s] 趋势极弱(Z=%.2f < Tier0=%.2f)，跳过",
+					state.ConfigGroup, state.Slug, decision.ZScore, config.Tier0ZScore)
+				state.LastEdgeLogTime = time.Now()
+			}
+		case "edge_insufficient":
+			if time.Since(state.LastEdgeLogTime) > 10*time.Second {
+				trendPercent := (kline.Close - kline.Open) / kline.Open
+				log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: Z=%.2f (Sigmoid价=%.3f), 市场价=%.3f, 优势=%.3f, 剩余%.0f秒",
+					state.ConfigGroup, state.Slug, decision.Side, trendPercent*100,
+					decision.ZScore, decision.FairPrice, decision.Price, decision.PriceEdge, timeLeftSec)
+				state.LastEdgeLogTime = time.Now()
+			}
+		case "price_too_low":
+			log.Printf("⚠️ [%s][%s] %s 价格 %.3f 低于阈值 %.2f，跳过",
+				state.ConfigGroup, state.Slug, decision.Side, decision.Price, config.Leg0SharePrice0)
+		case "price_too_high":
+			if !state.Leg1SkippedHighPrice {
+				log.Printf("⏭️ [%s][%s] %s 价格 %.3f 超过阈值 %.2f，跳过",
+					state.ConfigGroup, state.Slug, decision.Side, decision.Price, config.SharePriceLevel3)
+				state.Leg1SkippedHighPrice = true
+			}
+			// 其他原因 (too_early, too_late, trend_too_weak, no_price_for_side 等) 静默跳过
+		}
+		return
+	}
+
+	// ========== 执行交易 ==========
+	targetSide := decision.Side
+	price := decision.Price
+	amount := decision.Amount
+	zScore := decision.ZScore
+	fairPrice := decision.FairPrice
 	trendPercent := (kline.Close - kline.Open) / kline.Open
-
-	// 判断方向
-	var targetSide string
-	if trendPercent > config.MinTrendPercentUp {
-		targetSide = "UP"
-	} else if trendPercent < -config.MinTrendPercentDown {
-		targetSide = "DOWN"
-	} else {
-		return // 趋势不够明显
-	}
-
-	// 获取 Polymarket 价格
-	price, ok := state.LatestPrices[targetSide]
-	if !ok || price <= 0 {
-		return
-	}
-
-	// 🔍 DEBUG: 记录价格来源
-	// log.Printf("📊 [DEBUG][%s] %s 价格查询: side=%s, LatestPrices=%+v, 使用价格=%.4f",
-	// 	state.ConfigGroup, state.Slug, targetSide, state.LatestPrices, price)
-
-	// ========== Z-Score Sigmoid 公允价模型 ==========
-	// 计算剩余时间 (秒)
-	timeLeftSec := state.EndTime.Sub(now).Seconds()
-	if timeLeftSec < 0 {
-		timeLeftSec = 0
-	}
-
-	// 获取币种对应的波动率因子
-	volatility := getVolatilityFactor(state.Symbol, config)
-
-	// 趋势信号处理
-	// 对于 UP token，正趋势 -> 高价值
-	// 对于 DOWN token，负趋势 -> 高价值（所以取反）
-	signedTrend := trendPercent
-	if targetSide == "DOWN" {
-		signedTrend = -trendPercent // DOWN token 需要反向
-	}
-
-	// 使用 Sigmoid 模型计算公允价格
-	sensitivity := config.SigmoidSensitivity
-	if sensitivity <= 0 {
-		sensitivity = 1.5 // 默认敏感度
-	}
-	fairPrice := CalculateSigmoidFairPrice(signedTrend, timeLeftSec, volatility, sensitivity)
-
-	// 计算 Z-Score 用于日志
-	sqrtTime := math.Sqrt(math.Max(timeLeftSec, 10.0) / 900.0)
-	zScore := signedTrend / (volatility * sqrtTime)
-
-	// 检查价格优势
-	priceEdge := fairPrice - price
-
-	// ========== 动态优势调整 ==========
-
-	// 0. Tier 0 门槛检查 (最低准入)
-	if zScore < config.Tier0ZScore {
-		// Z-Score 低于最低门槛，直接跳过 (信号太弱)
-		// 降低日志频率，避免刷屏
-		if time.Since(state.LastEdgeLogTime) > 60*time.Second {
-			log.Printf("🔍 [%s][%s] 趋势极弱(Z=%.2f < Tier0=%.2f)，跳过", state.ConfigGroup, state.Slug, zScore, config.Tier0ZScore)
-			state.LastEdgeLogTime = time.Now()
-		}
-		return
-	}
-
-	// 1. 初始要求 (Tier 0)
-	requiredEdge := config.MinEdgeTier0
-
-	// 2. 高 Tier 优惠 (Tier4 -> Tier1)
-	if zScore >= config.Tier4ZScore {
-		requiredEdge = config.MinEdgeTier4
-	} else if zScore >= config.Tier3ZScore {
-		requiredEdge = config.MinEdgeTier3
-	} else if zScore >= config.Tier2ZScore {
-		requiredEdge = config.MinEdgeTier2
-	} else if zScore >= config.Tier1ZScore {
-		requiredEdge = config.MinEdgeTier1
-	}
-
-	// 记录决策过程 (用于调试为什么没交易)
-	if priceEdge < requiredEdge {
-		// 如果有趋势但优势不足，每10秒记录一次
-		if time.Since(state.LastEdgeLogTime) > 10*time.Second {
-			log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: Z=%.2f (Sigmoid价=%.3f), 市场价=%.3f, 优势=%.3f (要求=%.2f), 剩余%.0f秒",
-				state.ConfigGroup, state.Slug, targetSide, trendPercent*100, zScore, fairPrice, price, priceEdge, requiredEdge, timeLeftSec)
-			state.LastEdgeLogTime = time.Now()
-		}
-		return
-	}
-
-	// 检查价格范围
-	if price < config.Leg0SharePrice0 {
-		log.Printf("⚠️ [%s][%s] %s 价格 %.3f 低于阈值 %.2f，跳过", state.ConfigGroup, state.Slug, targetSide, price, config.Leg0SharePrice0)
-		return
-	}
-	if price > config.SharePriceLevel3 {
-		if !state.Leg1SkippedHighPrice {
-			log.Printf("⏭️ [%s][%s] %s 价格 %.3f 超过阈值 %.2f，跳过", state.ConfigGroup, state.Slug, targetSide, price, config.SharePriceLevel3)
-			state.Leg1SkippedHighPrice = true
-		}
-		return
-	}
-
-	// 确定购买数量
-	var amount float64
-	if price <= config.SharePriceLevel1 {
-		amount = config.ShareAmount1
-	} else if price <= config.SharePriceLevel2 {
-		amount = config.ShareAmount2
-	} else {
-		amount = config.ShareAmount3
-	}
 
 	// 执行 Leg1 买入
 	cost := price * amount
@@ -1774,68 +1710,5 @@ func anyToFloat(v interface{}) float64 {
 	}
 }
 
-// ========== Z-Score Sigmoid 公允价模型 ==========
-
-// CalculateSigmoidFairPrice 使用 Z-Score Sigmoid 模型计算公允价格
-//
-// 原理：使用 Sigmoid 函数将趋势信号映射到 [0, 1] 区间
-// Z = trend / (σ * sqrt(timeRatio))
-// FairPrice = 1 / (1 + e^(-K * Z))
-//
-// 参数:
-//   - trend: 趋势百分比 (currentClose - klineOpen) / klineOpen，带符号
-//   - timeLeftSec: 距离结算剩余秒数 (0 ~ 900)
-//   - volatility: 币种波动率因子 (BTC=0.0015, ETH=0.002, SOL=0.003, XRP=0.004)
-//   - sensitivity: 敏感度系数 K (建议 1.0 ~ 2.0)
-//
-// 返回:
-//   - fairPrice: 0 ~ 1 之间的公允价格
-func CalculateSigmoidFairPrice(trend float64, timeLeftSec float64, volatility float64, sensitivity float64) float64 {
-	// 1. 时间归一化 (物理时间)
-	// 防止除以 0，最小 10 秒
-	timeRatio := math.Max(timeLeftSec, 10.0) / 900.0
-
-	// 2. 构造 Z-Score
-	// Z = trend / (σ * sqrt(timeRatio))
-	// 趋势越大 -> Z 越大
-	// 时间越少 -> sqrt(timeRatio) 越小 -> Z 越大 (Gamma 效应)
-	sqrtTime := math.Sqrt(timeRatio)
-	if sqrtTime < 0.001 {
-		sqrtTime = 0.001 // 防止除以 0
-	}
-	zScore := trend / (volatility * sqrtTime)
-
-	// 3. Sigmoid 激活函数
-	// FairPrice = 1 / (1 + e^(-K * Z))
-	fairPrice := 1.0 / (1.0 + math.Exp(-sensitivity*zScore))
-
-	return fairPrice
-}
-
-// getVolatilityFactor 获取币种对应的波动率因子
-func getVolatilityFactor(symbol string, config StrategyConfig) float64 {
-	switch symbol {
-	case "BTC":
-		if config.VolatilityBTC > 0 {
-			return config.VolatilityBTC
-		}
-		return 0.0015 // 默认值
-	case "ETH":
-		if config.VolatilityETH > 0 {
-			return config.VolatilityETH
-		}
-		return 0.002
-	case "SOL":
-		if config.VolatilitySOL > 0 {
-			return config.VolatilitySOL
-		}
-		return 0.003
-	case "XRP":
-		if config.VolatilityXRP > 0 {
-			return config.VolatilityXRP
-		}
-		return 0.004
-	default:
-		return 0.003 // 未知币种使用中等波动率
-	}
-}
+// NOTE: CalculateSigmoidFairPrice and GetVolatilityFactor have been moved to strategy_engine.go
+// to enable sharing between live trading and backtesting.

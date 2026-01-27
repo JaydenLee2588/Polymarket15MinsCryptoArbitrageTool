@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"Polymarket15MinsCryptoArbitrageTool/internal/datarecorder"
 )
 
 // Binance 合约 WebSocket URL
@@ -161,6 +163,11 @@ func (c *BinanceKlineClient) updateKline(symbol string, k binanceKline) {
 		data.LastUpdate = time.Now()
 	}
 	c.mu.Unlock()
+
+	// Record to Data Recorder
+	if recorder := datarecorder.GetInstance(); recorder != nil {
+		recorder.RecordKline(symbol, openPrice, highPrice, lowPrice, currentPrice, toFloat64(k.V), k.T)
+	}
 }
 
 // NewBinanceKlineClient 创建新的 Binance K线客户端

@@ -1,6 +1,8 @@
 package realtime
 
 import (
+	"Polymarket15MinsCryptoArbitrageTool/internal/datarecorder"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -337,6 +339,18 @@ func (m *MarketManager) handleMessage(msg StreamMessage) {
 		}
 		m.orderBooks[book.AssetID] = book
 		m.orderBooksMu.Unlock()
+
+		// Record to Data Recorder
+		if recorder := datarecorder.GetInstance(); recorder != nil {
+			bestBid, _, ok1 := GetBestBid(book)
+			bestAsk, _, ok2 := GetBestAsk(book)
+			if ok1 && ok2 {
+				bidF, _ := bestBid.Float64()
+				askF, _ := bestAsk.Float64()
+				ts, _ := strconv.ParseInt(book.Timestamp, 10, 64)
+				recorder.RecordOrderBook(book.AssetID, bidF, askF, ts)
+			}
+		}
 
 		if m.onBookUpdate != nil {
 			m.onBookUpdate(book)

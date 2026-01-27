@@ -15,6 +15,7 @@ import (
 	"Polymarket15MinsCryptoArbitrageTool/api"
 	"Polymarket15MinsCryptoArbitrageTool/bot"
 	"Polymarket15MinsCryptoArbitrageTool/internal/database"
+	"Polymarket15MinsCryptoArbitrageTool/internal/datarecorder"
 
 	"github.com/joho/godotenv"
 )
@@ -32,6 +33,12 @@ func main() {
 	}
 	defer database.CloseDB()
 	log.Printf("✅ 数据库已初始化: %s", dbPath)
+
+	// 初始化数据记录器 (用于回测数据收集)
+	if err := datarecorder.GetInstance().Init(); err != nil {
+		log.Printf("⚠️ 数据记录器初始化失败: %v", err)
+	}
+	defer datarecorder.GetInstance().Close()
 
 	// 设置 API 数据库引用
 	api.SetDatabase(database.GetDB())
