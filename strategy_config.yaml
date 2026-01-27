@@ -31,8 +31,8 @@ groups:
     # --------------------------------------------------------------------------
     # 1. Binance 趋势检测参数
     # --------------------------------------------------------------------------
-    min_trend_percent_up: 0.0012      # 做多最小趋势阈值 (0.1%)，只有涨幅超过此值才开始计算
-    min_trend_percent_down: 0.0012    # 做空最小趋势阈值 (0.1%)，只有跌幅超过此值才开始计算
+    min_trend_percent_up: 0.0013      # 做多最小趋势阈值 (0.1%)，只有涨幅超过此值才开始计算
+    min_trend_percent_down: 0.0013    # 做空最小趋势阈值 (0.1%)，只有跌幅超过此值才开始计算
     trend_window_sec_start: 300      # 趋势检测窗口起点: 开盘后 300秒 (约5分钟) 开始
     trend_window_sec_end: 480        # 趋势检测窗口终点: 开盘后 480秒 (8分钟) 停止检测
 
@@ -56,7 +56,7 @@ groups:
     # --------------------------------------------------------------------------
     # 4. Sigmoid 公允价模型参数
     # --------------------------------------------------------------------------
-    sigmoid_sensitivity: 2.0          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
+    sigmoid_sensitivity: 1.8          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
     volatility_btc: 0.0012             # BTC 波动率因子 (0.15%): 用于 Z-Score 分母标准化
     volatility_eth: 0.0012             # ETH 波动率因子 (0.12%)
     volatility_sol: 0.0012             # SOL 波动率因子 (0.12%)
@@ -86,14 +86,14 @@ groups:
     min_trend_percent_up: 0.003      # [对比] 极高阈值 (0.25%)，只做大行情
     min_trend_percent_down: 0.003    # [对比]
     trend_window_sec_start: 300       # [对比] 只要趋势出来，可以很早进场
-    trend_window_sec_end: 480
+    trend_window_sec_end: 600         # [对比] 延迟离场时间
     leg0_share_price_0: 0.51          # [对比] 低价位
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.85          # [对比] 允许较高位置追突破
     leg1_share_price_3: 0.97          # [对比] 接近满值也追
-    leg1_share_amount_1: 50
-    leg1_share_amount_2: 50
-    leg1_share_amount_3: 50
+    leg1_share_amount_1: 70
+    leg1_share_amount_2: 70
+    leg1_share_amount_3: 70
     max_slippage: 0.05                # 突破行情波动大，稍宽滑点
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.2          # [对比] 高K值，一旦突破，S曲线迅速拉升
@@ -109,6 +109,36 @@ groups:
     tier_4_z_score: 1.8
     min_edge_tier_0: 0.01     # [对比] 只要微弱优势即可
     min_edge_tier_1: 0.00     # 平价即可
+    min_edge_tier_2: 0.00
+    min_edge_tier_3: 0.00
+    min_edge_tier_4: 0.00
+
+  - id: "改进2号"
+    min_trend_percent_up: 0.002
+    min_trend_percent_down: 0.002
+    trend_window_sec_start: 250
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.51
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.85
+    leg1_share_price_3: 0.97
+    leg1_share_amount_1: 40
+    leg1_share_amount_2: 40
+    leg1_share_amount_3: 40
+    max_slippage: 0.05
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 2.2
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0012
+    volatility_xrp: 0.0012
+    tier_0_z_score: 0.8
+    tier_1_z_score: 1.0
+    tier_2_z_score: 1.2
+    tier_3_z_score: 1.4
+    tier_4_z_score: 1.8
+    min_edge_tier_0: 0.01
+    min_edge_tier_1: 0.00
     min_edge_tier_2: 0.00
     min_edge_tier_3: 0.00
     min_edge_tier_4: 0.00
