@@ -74,7 +74,7 @@ groups:
     leg0_share_price_0: 0.51          # [对比] 低价位
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.85          # [对比] 允许较高位置追突破
-    leg1_share_price_3: 0.97          # [对比] 接近满值也追
+    leg1_share_price_3: 0.95          # [对比] 接近满值也追
     leg1_share_amount_1: 70
     leg1_share_amount_2: 70
     leg1_share_amount_3: 70
@@ -106,10 +106,10 @@ groups:
     leg0_share_price_0: 0.51
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.85
-    leg1_share_price_3: 0.97
-    leg1_share_amount_1: 40
-    leg1_share_amount_2: 40
-    leg1_share_amount_3: 40
+    leg1_share_price_3: 0.95
+    leg1_share_amount_1: 100
+    leg1_share_amount_2: 100
+    leg1_share_amount_3: 100
     max_slippage: 0.05
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.2
