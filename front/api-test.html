@@ -192,9 +192,11 @@
                 <span class="method-badge method-get">GET</span>
             </div>
             <div class="endpoint">/api/v1/sim-copy-trading?type=2</div>
-            <button class="btn btn-primary" onclick="startCopyTrading()">启动模拟</button>
+            <button id="btn-start" class="btn btn-primary" onclick="startCopyTrading()">启动模拟</button>
+            <button id="btn-stop" class="btn btn-primary" style="background: linear-gradient(135deg, #ff6b6b, #ff8787);"
+                onclick="stopCopyTrading()">🛑 停止跟单</button>
             <div class="response-container">
-                <div id="trading-response" class="response-area">点击上方按钮启动模拟...</div>
+                <div id="trading-response" class="response-area">点击上方按钮启动/停止模拟...</div>
             </div>
         </div>
 
@@ -255,6 +257,12 @@
 
         async function startCopyTrading() {
             const responseEl = document.getElementById('trading-response');
+            const btnStart = document.getElementById('btn-start');
+            const btnStop = document.getElementById('btn-stop');
+
+            // 禁用按钮防止重复点击
+            btnStart.disabled = true;
+            btnStart.textContent = '启动中...';
             responseEl.textContent = '启动中...';
 
             try {
@@ -263,6 +271,31 @@
                 responseEl.textContent = JSON.stringify(data, null, 2);
             } catch (err) {
                 responseEl.textContent = '错误: ' + err.message;
+            } finally {
+                btnStart.disabled = false;
+                btnStart.textContent = '启动模拟';
+            }
+        }
+
+        async function stopCopyTrading() {
+            const responseEl = document.getElementById('trading-response');
+            const btnStart = document.getElementById('btn-start');
+            const btnStop = document.getElementById('btn-stop');
+
+            // 禁用按钮防止重复点击
+            btnStop.disabled = true;
+            btnStop.textContent = '停止中...';
+            responseEl.textContent = '停止中...';
+
+            try {
+                const res = await fetch('/api/v1/sim-stop-trading');
+                const data = await res.json();
+                responseEl.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                responseEl.textContent = '错误: ' + err.message;
+            } finally {
+                btnStop.disabled = false;
+                btnStop.textContent = '🛑 停止跟单';
             }
         }
 

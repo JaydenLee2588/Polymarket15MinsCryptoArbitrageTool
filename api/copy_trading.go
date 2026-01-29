@@ -89,3 +89,27 @@ func CopyTradingHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp":    time.Now(),
 	})
 }
+
+// StopCopyTradingHandler 处理停止跟单请求
+func StopCopyTradingHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var message string
+	var status string
+
+	stopped := StopSimulation()
+	if stopped {
+		message = "Copy trading stopped successfully"
+		status = "success"
+	} else {
+		message = "Copy trading is not running"
+		status = "warning"
+	}
+
+	// 返回 JSON 响应
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    status,
+		"message":   message,
+		"timestamp": time.Now(),
+	})
+}

@@ -51,6 +51,8 @@ type MarketState struct {
 var (
 	simMu               sync.Mutex
 	isSimRunning        bool
+	simStopChan         chan struct{} // 停止信号通道
+	simDoneChan         chan struct{} // 停止完成确认通道
 	binanceClient       *src.BinanceKlineClient
 	lastPriceUpdateTime time.Time
 	lastPriceUpdateMu   sync.Mutex
@@ -212,6 +214,9 @@ func StartSimulation(configs []StrategyConfig) bool {
 		}
 	}
 
+	// 创建停止通道和完成确认通道
+	simStopChan = make(chan struct{})
+	simDoneChan = make(chan struct{})
 	isSimRunning = true
 	go runSimulationLoop(configs)
 	log.Printf("🚀 策略模拟已启动 - %d 个配置组", len(configs))
@@ -232,6 +237,36 @@ func StartSimulation(configs []StrategyConfig) bool {
 	}
 
 	return true
+}
+
+// StopSimulation 停止模拟跟单 (幂等)
+func StopSimulation() bool {
+	simMu.Lock()
+
+	if !isSimRunning {
+		simMu.Unlock()
+		log.Println("⚠️ 策略模拟未在运行。")
+		return false
+	}
+
+	// 立即标记为已停止，防止重复调用 close 导致 panic
+	isSimRunning = false
+	close(simStopChan)
+	log.Println("🛑 已发送停止信号，等待模拟循环退出...")
+
+	// 保存 done channel 引用，解锁后等待
+	doneChan := simDoneChan
+	simMu.Unlock()
+
+	// 等待循环确认退出 (带超时保护)
+	select {
+	case <-doneChan:
+		log.Println("✅ 模拟循环已确认退出")
+		return true
+	case <-time.After(10 * time.Second):
+		log.Println("⚠️ 等待模拟循环退出超时 (10秒)")
+		return true
+	}
 }
 
 // runSimulationLoop 模拟循环
@@ -307,6 +342,44 @@ func runSimulationLoop(configs []StrategyConfig) {
 
 	for {
 		select {
+		case <-simStopChan:
+			// 收到停止信号，清理资源并退出
+			log.Println("🛑 收到停止信号，正在清理资源...")
+
+			// 停止 MarketManager
+			marketManagerMu.Lock()
+			if marketManager != nil {
+				marketManager.Stop()
+				log.Println("✅ MarketManager 已停止")
+			}
+			marketManagerMu.Unlock()
+
+			// 关闭 Binance WebSocket
+			if binanceClient != nil {
+				binanceClient.Close()
+				log.Println("✅ Binance WebSocket 已关闭")
+			}
+
+			// 停止赎回服务
+			redeemerMu.Lock()
+			if redeemer != nil {
+				redeemer.Stop()
+				log.Println("✅ 赎回服务已停止")
+			}
+			redeemerMu.Unlock()
+
+			// 重置全局状态 (isSimRunning 已在 StopSimulation 中设置为 false)
+			simMu.Lock()
+			rtConfigsRef = nil
+			rtConfigStatesRef = nil
+			simMu.Unlock()
+
+			log.Println("🛑 策略模拟已完全停止，可重新启动")
+
+			// 发送完成确认信号
+			close(simDoneChan)
+			return
+
 		case <-restTicker.C:
 			scanAndSubscribeWithManager(mgr, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
 

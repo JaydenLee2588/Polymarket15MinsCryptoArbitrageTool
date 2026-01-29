@@ -20,6 +20,9 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// 模拟跟单启动接口
 	mux.HandleFunc("/api/v1/sim-copy-trading", CopyTradingHandler)
 
+	// 模拟跟单停止接口
+	mux.HandleFunc("/api/v1/sim-stop-trading", StopCopyTradingHandler)
+
 	// 数据管理接口 - 清空交易记录
 	mux.HandleFunc("/api/v1/trades", DeleteTradesHandler)
 }
