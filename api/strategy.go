@@ -350,13 +350,15 @@ func runSimulationLoop(configs []StrategyConfig) {
 			marketManagerMu.Lock()
 			if marketManager != nil {
 				marketManager.Stop()
+				marketManager = nil // 清理引用，确保重启时创建新实例
 				log.Println("✅ MarketManager 已停止")
 			}
 			marketManagerMu.Unlock()
 
-			// 关闭 Binance WebSocket
+			// 关闭 Binance WebSocket (已幂等，多次调用安全)
 			if binanceClient != nil {
 				binanceClient.Close()
+				binanceClient = nil // 清理引用
 				log.Println("✅ Binance WebSocket 已关闭")
 			}
 
@@ -364,9 +366,15 @@ func runSimulationLoop(configs []StrategyConfig) {
 			redeemerMu.Lock()
 			if redeemer != nil {
 				redeemer.Stop()
+				redeemer = nil // 清理引用
 				log.Println("✅ 赎回服务已停止")
 			}
 			redeemerMu.Unlock()
+
+			// 清理 CLOB 客户端
+			clobClientMu.Lock()
+			clobOrderClient = nil
+			clobClientMu.Unlock()
 
 			// 重置全局状态 (isSimRunning 已在 StopSimulation 中设置为 false)
 			simMu.Lock()
