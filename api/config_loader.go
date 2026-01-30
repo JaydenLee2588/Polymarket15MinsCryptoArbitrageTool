@@ -146,7 +146,18 @@ func GetOrLoadConfigs(baseConfig StrategyConfig) []StrategyConfig {
 }
 
 // GetCurrentConfigs 获取当前配置 (线程安全，只读)
+// 如果配置尚未初始化，会先尝试从 YAML 文件加载
 func GetCurrentConfigs() []StrategyConfig {
+	globalConfigsMu.RLock()
+	initialized := configInitialized
+	globalConfigsMu.RUnlock()
+
+	// 如果尚未初始化，先加载配置
+	if !initialized {
+		// 使用空的基础配置触发加载
+		GetOrLoadConfigs(StrategyConfig{})
+	}
+
 	globalConfigsMu.RLock()
 	defer globalConfigsMu.RUnlock()
 
