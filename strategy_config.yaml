@@ -42,20 +42,20 @@ groups:
     max_slippage: 0.03                # 最大允许滑点 (单位: 美元)，用于 Taker 吃单保护
     price_tick_size: 0.01             # 交易所最小价格变动单位 (1美分)
     sigmoid_sensitivity: 1.8          # K值敏感度: 控制S曲线陡峭程度。值越小越保守，越大越激进
-    volatility_btc: 0.0012             # BTC 波动率因子 (0.15%): 用于 Z-Score 分母标准化
-    volatility_eth: 0.0012             # ETH 波动率因子 (0.12%)
-    volatility_sol: 0.0024             # SOL 波动率因子 (0.12%)
-    volatility_xrp: 0.0015             # XRP 波动率因子 (0.15%)
-    tier_0_z_score: 1.5       # Tier 0 门槛: Z < 0.6 时，信号无效，不交易
-    tier_1_z_score: 1.6       # Tier 1 门槛: 0.6 <= Z < 0.8
-    tier_2_z_score: 1.7       # Tier 2 门槛: 0.8 <= Z < 1.0
-    tier_3_z_score: 1.8       # Tier 3 门槛: 1.0 <= Z < 1.4
-    tier_4_z_score: 2.0       # Tier 4 门槛: Z >= 2.0
-    min_edge_tier_0: 0.03     # Z [0.6, 0.8): 信号微弱，要求极大优势 (13美分) 才买
-    min_edge_tier_1: 0.02     # Z [0.8, 1.0): 信号一般，要求较大优势 (10美分)
-    min_edge_tier_2: 0.01     # Z [1.0, 1.4): 信号较强，要求中等优势 (6美分)
-    min_edge_tier_3: 0.00     # Z [1.4, 2.0): 信号很强，要求微小优势 (3美分)
-    min_edge_tier_4: 0.00     # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单一
+    volatility_btc: 0.0012            # BTC 波动率因子 (0.15%): 用于 Z-Score 分母标准化
+    volatility_eth: 0.0012            # ETH 波动率因子 (0.12%)
+    volatility_sol: 0.0024            # SOL 波动率因子 (0.12%)
+    volatility_xrp: 0.0015            # XRP 波动率因子 (0.15%)
+    tier_0_z_score: 1.5               # Tier 0 门槛: Z < 0.6 时，信号无效，不交易
+    tier_1_z_score: 1.6               # Tier 1 门槛: 0.6 <= Z < 0.8
+    tier_2_z_score: 1.7               # Tier 2 门槛: 0.8 <= Z < 1.0
+    tier_3_z_score: 1.8               # Tier 3 门槛: 1.0 <= Z < 1.4
+    tier_4_z_score: 2.0               # Tier 4 门槛: Z >= 2.0
+    min_edge_tier_0: 0.03             # Z [0.6, 0.8): 信号微弱，要求极大优势 (13美分) 才买
+    min_edge_tier_1: 0.02             # Z [0.8, 1.0): 信号一般，要求较大优势 (10美分)
+    min_edge_tier_2: 0.01             # Z [1.0, 1.4): 信号较强，要求中等优势 (6美分)
+    min_edge_tier_3: 0.00             # Z [1.4, 2.0): 信号很强，要求微小优势 (3美分)
+    min_edge_tier_4: 0.00             # Z >= 2.0:     信号极强，只要不亏本 (0优势) 就可以抢单一
 
   - id: "基本2号"
     min_trend_percent_up: 0.002       # 保持中等敏感度
@@ -65,10 +65,10 @@ groups:
     leg0_share_price_0: 0.62          # 提高底部保护，太便宜的往往是死单
     leg1_share_price_1: 0.72
     leg1_share_price_2: 0.80
-    leg1_share_price_3: 0.85          # [重点] 严控最高价，绝并不追 0.90 以上
-    leg1_share_amount_1: 100
-    leg1_share_amount_2: 70
-    leg1_share_amount_3: 50
+    leg1_share_price_3: 0.86          # [重点] 严控最高价，绝并不追 0.90 以上
+    leg1_share_amount_1: 120
+    leg1_share_amount_2: 80
+    leg1_share_amount_3: 40
     max_slippage: 0.04                # [重点] 严控滑点
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          # 适中

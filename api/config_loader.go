@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -107,31 +108,145 @@ type configFileYAML struct {
 
 var (
 	globalConfigs     []StrategyConfig
-	globalConfigsOnce sync.Once
+	globalConfigsMu   sync.RWMutex   // 读写锁保护配置
+	configFilePath    string         // 配置文件路径
+	defaultBaseConfig StrategyConfig // 默认基础配置
+	configInitialized bool           // 是否已初始化
 )
 
 // GetOrLoadConfigs 获取或加载配置
 func GetOrLoadConfigs(baseConfig StrategyConfig) []StrategyConfig {
-	globalConfigsOnce.Do(func() {
+	globalConfigsMu.Lock()
+	defer globalConfigsMu.Unlock()
+
+	if !configInitialized {
+		// 保存默认配置
+		defaultBaseConfig = baseConfig
+
 		// 尝试从 YAML 文件加载
-		configFile := os.Getenv("CONFIG_FILE")
-		if configFile == "" {
-			configFile = "config.yaml"
+		configFilePath = os.Getenv("CONFIG_FILE")
+		if configFilePath == "" {
+			configFilePath = "strategy_config.yaml"
 		}
 
-		if configs, err := LoadConfigsFromYAML(configFile, baseConfig); err == nil && len(configs) > 0 {
+		if configs, err := LoadConfigsFromYAML(configFilePath, baseConfig); err == nil && len(configs) > 0 {
 			globalConfigs = configs
-			log.Printf("📝 从 %s 加载了 %d 个配置组", configFile, len(configs))
+			log.Printf("📝 从 %s 加载了 %d 个配置组", configFilePath, len(configs))
 		} else {
 			// 使用默认配置
 			globalConfigs = []StrategyConfig{baseConfig}
 			if err != nil {
-				log.Printf("⚠️ 无法加载配置文件 %s: %v，使用默认配置", configFile, err)
+				log.Printf("⚠️ 无法加载配置文件 %s: %v，使用默认配置", configFilePath, err)
 			}
 		}
-	})
+		configInitialized = true
+	}
 
 	return globalConfigs
+}
+
+// GetCurrentConfigs 获取当前配置 (线程安全，只读)
+func GetCurrentConfigs() []StrategyConfig {
+	globalConfigsMu.RLock()
+	defer globalConfigsMu.RUnlock()
+
+	// 返回副本防止外部修改
+	result := make([]StrategyConfig, len(globalConfigs))
+	copy(result, globalConfigs)
+	return result
+}
+
+// GetConfigFilePath 获取当前配置文件路径
+func GetConfigFilePath() string {
+	globalConfigsMu.RLock()
+	defer globalConfigsMu.RUnlock()
+	return configFilePath
+}
+
+// ReloadConfigs 强制重新加载配置 (热加载)
+func ReloadConfigs() ([]StrategyConfig, error) {
+	globalConfigsMu.Lock()
+	defer globalConfigsMu.Unlock()
+
+	if configFilePath == "" {
+		configFilePath = os.Getenv("CONFIG_FILE")
+		if configFilePath == "" {
+			configFilePath = "strategy_config.yaml"
+		}
+	}
+
+	configs, err := LoadConfigsFromYAML(configFilePath, defaultBaseConfig)
+	if err != nil {
+		return nil, fmt.Errorf("重新加载配置失败: %w", err)
+	}
+
+	globalConfigs = configs
+	log.Printf("🔄 配置已热加载，共 %d 个配置组", len(configs))
+	return configs, nil
+}
+
+// SaveConfigsToYAML 将配置保存到 YAML 文件
+func SaveConfigsToYAML(configs []StrategyConfig) error {
+	globalConfigsMu.Lock()
+	defer globalConfigsMu.Unlock()
+
+	if configFilePath == "" {
+		configFilePath = "strategy_config.yaml"
+	}
+
+	// 转换为 YAML 结构
+	yamlGroups := make([]configGroupYAML, len(configs))
+	for i, cfg := range configs {
+		yamlGroups[i] = configGroupYAML{
+			ID:                   cfg.ID,
+			MinTrendPercentUp:    cfg.MinTrendPercentUp,
+			MinTrendPercentDown:  cfg.MinTrendPercentDown,
+			FairPriceTrendFactor: cfg.FairPriceTrendFactor,
+			TrendWindowSecStart:  cfg.TrendWindowSecStart,
+			TrendWindowSecEnd:    cfg.TrendWindowSecEnd,
+			Leg0SharePrice0:      cfg.Leg0SharePrice0,
+			Leg1SharePrice1:      cfg.SharePriceLevel1,
+			Leg1SharePrice2:      cfg.SharePriceLevel2,
+			Leg1SharePrice3:      cfg.SharePriceLevel3,
+			Leg1ShareAmount1:     cfg.ShareAmount1,
+			Leg1ShareAmount2:     cfg.ShareAmount2,
+			Leg1ShareAmount3:     cfg.ShareAmount3,
+			ScanIntervalSec:      cfg.ScanIntervalSec,
+			MaxSlippage:          cfg.MaxSlippage,
+			PriceTickSize:        cfg.PriceTickSize,
+			SigmoidSensitivity:   cfg.SigmoidSensitivity,
+			VolatilityBTC:        cfg.VolatilityBTC,
+			VolatilityETH:        cfg.VolatilityETH,
+			VolatilitySOL:        cfg.VolatilitySOL,
+			VolatilityXRP:        cfg.VolatilityXRP,
+			Tier0ZScore:          cfg.Tier0ZScore,
+			Tier1ZScore:          cfg.Tier1ZScore,
+			Tier2ZScore:          cfg.Tier2ZScore,
+			Tier3ZScore:          cfg.Tier3ZScore,
+			Tier4ZScore:          cfg.Tier4ZScore,
+			MinEdgeTier0:         &cfg.MinEdgeTier0,
+			MinEdgeTier1:         &cfg.MinEdgeTier1,
+			MinEdgeTier2:         &cfg.MinEdgeTier2,
+			MinEdgeTier3:         &cfg.MinEdgeTier3,
+			MinEdgeTier4:         &cfg.MinEdgeTier4,
+		}
+	}
+
+	yamlConfig := configFileYAML{Groups: yamlGroups}
+
+	data, err := yaml.Marshal(&yamlConfig)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+
+	if err := os.WriteFile(configFilePath, data, 0644); err != nil {
+		return fmt.Errorf("写入配置文件失败: %w", err)
+	}
+
+	// 更新内存中的配置
+	globalConfigs = configs
+	log.Printf("💾 配置已保存到 %s，共 %d 个配置组", configFilePath, len(configs))
+	return nil
 }
 
 // LoadConfigsFromYAML 从 YAML 文件加载配置

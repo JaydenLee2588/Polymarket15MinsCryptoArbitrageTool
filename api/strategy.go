@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -490,6 +491,30 @@ func runSimulationLoop(configs []StrategyConfig) {
 			}
 
 		case <-heartbeatTicker.C:
+			// ========== 配置热加载检查 ==========
+			newConfigs := GetCurrentConfigs()
+			if len(newConfigs) > 0 {
+				// 使用 reflect.DeepEqual 完整比较所有字段
+				configChanged := !reflect.DeepEqual(newConfigs, configs)
+
+				if configChanged {
+					log.Printf("🔄 [热加载] 检测到配置变化，正在应用新配置...")
+					configs = newConfigs
+
+					// 更新全局引用 (供回调使用)
+					simMu.Lock()
+					rtConfigsRef = &configs
+					simMu.Unlock()
+
+					log.Printf("✅ [热加载] 新配置已生效，共 %d 个配置组", len(configs))
+					for _, cfg := range configs {
+						log.Printf("   📝 [%s] MinTrendUp=%.4f, MinTrendDown=%.4f, SharePrice3=%.2f",
+							cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, cfg.SharePriceLevel3)
+					}
+				}
+			}
+
+			// ========== 原心跳逻辑 ==========
 			simMu.Lock()
 			totalActive := 0
 			totalPending := 0
