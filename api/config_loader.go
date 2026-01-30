@@ -254,9 +254,17 @@ func SaveConfigsToYAML(configs []StrategyConfig) error {
 		return fmt.Errorf("写入配置文件失败: %w", err)
 	}
 
-	// 更新内存中的配置
-	globalConfigs = configs
-	log.Printf("💾 配置已保存到 %s，共 %d 个配置组", configFilePath, len(configs))
+	// 🔴 重要修复：重新从文件加载配置，确保 TradingMode/OrderType 从环境变量正确读取
+	// 不能直接使用传入的 configs，因为它可能缺少这些字段
+	reloadedConfigs, err := LoadConfigsFromYAML(configFilePath, defaultBaseConfig)
+	if err != nil {
+		log.Printf("⚠️ 保存后重新加载配置失败: %v，使用原配置", err)
+		globalConfigs = configs // 降级处理
+	} else {
+		globalConfigs = reloadedConfigs
+	}
+
+	log.Printf("💾 配置已保存到 %s，共 %d 个配置组", configFilePath, len(globalConfigs))
 	return nil
 }
 
