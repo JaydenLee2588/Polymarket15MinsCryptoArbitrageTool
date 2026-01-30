@@ -451,10 +451,12 @@
                 return;
             }
 
+            // 先保存 action，因为 closeModal 会清空 pendingAction
+            const action = pendingAction;
             closeModal();
 
             // 执行对应操作
-            switch (pendingAction) {
+            switch (action) {
                 case 'startCopyTrading':
                     startCopyTrading(code);
                     break;
