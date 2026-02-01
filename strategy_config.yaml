@@ -28,8 +28,8 @@
 
 groups:
   - id: "基准1号"
-    min_trend_percent_up: 0.0015      # 调高了一些，从0.0013升级到0.0015
-    min_trend_percent_down: 0.0015    # 调高了一些，从0.0013升级到0.0015
+    min_trend_percent_up: 0.0015      # 这个调整成1，没什么差别
+    min_trend_percent_down: 0.0015    # 这个调整成1，没什么差别
     trend_window_sec_start: 320
     trend_window_sec_end: 480
     leg0_share_price_0: 0.62
@@ -58,8 +58,8 @@ groups:
     min_edge_tier_4: 0.00
 
   - id: "基本2号"
-    min_trend_percent_up: 0.0022      # 从0.002升级限制到0.22%
-    min_trend_percent_down: 0.0022    # 从0.002升级限制到0.22%
+    min_trend_percent_up: 0.0022      # 这个降成0.18会输很惨
+    min_trend_percent_down: 0.0022    # 这个降成0.18会输很惨
     trend_window_sec_start: 300
     trend_window_sec_end: 450         
     leg0_share_price_0: 0.62          
@@ -88,71 +88,91 @@ groups:
     min_edge_tier_4: 0.01 
 
   - id: "基本3号"
-    # 暂时保留，虽然真是盘亏的，但是模拟盘里赚的很。
-    min_trend_percent_up: 0.0035      # [对比] 极高阈值 (0.25%)，只做大行情
-    min_trend_percent_down: 0.0035    # [对比]
-    trend_window_sec_start: 350       # [对比] 只要趋势出来，可以很早进场
-    trend_window_sec_end: 590         # [对比] 延迟离场时间
-    leg0_share_price_0: 0.55          # [对比] 低价位
+    min_trend_percent_up: 0.0035    # 很违反直觉，这个提成4之后，反而成功率下降了
+    min_trend_percent_down: 0.0035  # 很违反直觉，这个提成4之后，反而成功率下降了
+    trend_window_sec_start: 350   
+    trend_window_sec_end: 450       # 这个增加到590时，差别不大，成功率有略微下降
+    leg0_share_price_0: 0.55      
     leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78          # [对比] 允许较高位置追突破
-    leg1_share_price_3: 0.84          # [对比] 接近满值也追
+    leg1_share_price_2: 0.78      
+    leg1_share_price_3: 0.84      
     leg1_share_amount_1: 100
     leg1_share_amount_2: 80
     leg1_share_amount_3: 40
-    max_slippage: 0.04                # 突破行情波动大，稍宽滑点
+    max_slippage: 0.04            
     price_tick_size: 0.01
-    sigmoid_sensitivity: 2.2          # [对比] 高K值，一旦突破，S曲线迅速拉升
+    sigmoid_sensitivity: 2.2      
     volatility_btc: 0.0012
     volatility_eth: 0.0012
     volatility_sol: 0.0012
     volatility_xrp: 0.0012
-    tier_0_z_score: 0.8       # [对比] 只要Z > 0.8 就进 (因为有强趋势背书)
+    tier_0_z_score: 0.8
     tier_1_z_score: 1.0
     tier_2_z_score: 1.2
     tier_3_z_score: 1.4
     tier_4_z_score: 1.8
-    min_edge_tier_0: 0.01     # [对比] 只要微弱优势即可
-    min_edge_tier_1: 0.00     # 平价即可
+    min_edge_tier_0: 0.01
+    min_edge_tier_1: 0.00
     min_edge_tier_2: 0.00
     min_edge_tier_3: 0.00
     min_edge_tier_4: 0.00
 
   - id: "仿AI测试参数3"
-    # [趋势] 只有大行情才开火
-    min_trend_percent_up: 0.0045       # 0.4% (非常高，一天可能只触发几次)
-    min_trend_percent_down: 0.0045
-    # [时间] 拉长窗口，因为大行情稀缺，不想错过尾盘的绝杀
-    trend_window_sec_start: 300       # 5分钟后
-    trend_window_sec_end: 780         # 一直到 13分钟
-    # [价格] 极其保守的买入区间
-    leg0_share_price_0: 0.10          # 暂时还是放的非常低 【要小心】        
-    leg1_share_price_1: 0.69          # 0.6790 -> 0.68 (核心重仓区)
-    leg1_share_price_2: 0.78          # 0.8710 -> 0.85
-    leg1_share_price_3: 0.84          # [核心] 0.8825 -> 0.88 (铁底线，过了绝不买)
-    # [仓位] 甚至比AI更极端的倒金字塔
-    leg1_share_amount_1: 150          # 便宜：梭哈
-    leg1_share_amount_2: 60           # 正常：半仓
-    leg1_share_amount_3: 15           # 贵了：象征性买10手
-    # [执行]
-    max_slippage: 0.03                # 严控滑点
+    min_trend_percent_up: 0.004       # 很违反直觉，0.0045之后，反而成功率下降了
+    min_trend_percent_down: 0.004     # 很违反直觉，0.0045之后，反而成功率下降了
+    trend_window_sec_start: 330       # 扩大到300，成功率下降
+    trend_window_sec_end: 530         # 扩大到780，成功率下降
+    leg0_share_price_0: 0.10         
+    leg1_share_price_1: 0.69         
+    leg1_share_price_2: 0.83          # 这个值压制到0.78，成功率和盈利都下降了
+    leg1_share_price_3: 0.91          # 这个值压制到0.84，成功率和盈利都下降了        
+    leg1_share_amount_1: 100         
+    leg1_share_amount_2: 50          
+    leg1_share_amount_3: 15          
+    max_slippage: 0.03               
     price_tick_size: 0.01
-    # [模型] 保持高敏
-    sigmoid_sensitivity: 4.5          # AI是 4.5375
-    # [波动率] 平滑化
+    sigmoid_sensitivity: 4.5          # 这个降为4后，成功率下降     
     volatility_btc: 0.004
     volatility_eth: 0.001
     volatility_sol: 0.006
     volatility_xrp: 0.008
-    # [阈值] 既然门槛高达0.4%，Z-Score其实已经不重要了，设低点方便触发
     tier_0_z_score: 0.5               
-    tier_1_z_score: 1.0
-    tier_2_z_score: 2.5
-    tier_3_z_score: 3.0
-    tier_4_z_score: 4.0
-    # [优势] 允许追单 (负Edge)
+    tier_1_z_score: 1.0               # 违反直觉，这个增加后，反而成功率和收益都下降了
+    tier_2_z_score: 2.5               # 违反直觉，这个增加后，反而成功率和收益都下降了  
+    tier_3_z_score: 3.0               # 违反直觉，这个增加后，反而成功率和收益都下降了
+    tier_4_z_score: 4.0               # 违反直觉，这个增加后，反而成功率和收益都下降了 
     min_edge_tier_0: -0.50
     min_edge_tier_1: -0.50
     min_edge_tier_2: -0.50
     min_edge_tier_3: -0.50
     min_edge_tier_4: -0.50
+
+  - id: "AI测试参数2"
+    min_trend_percent_up: 0.0045     # 保持中等敏感度
+    min_trend_percent_down: 0.0015
+    trend_window_sec_start: 332
+    trend_window_sec_end: 529        # 适中窗口
+    leg0_share_price_0: 0.0934     # 提高底部保护，太便宜的往往是死单
+    leg1_share_price_1: 0.6428
+    leg1_share_price_2: 0.9226
+    leg1_share_price_3: 0.9462
+    leg1_share_amount_1: 100        # 100
+    leg1_share_amount_2: 44         # 54
+    leg1_share_amount_3: 24         # 50
+    maxslippage: 0.02
+    priceticksize: 0.01
+    sigmoid_sensitivity: 4.1137     # 适中
+    volatility_btc: 0.0022
+    volatility_eth: 0.0005
+    volatility_sol: 0.0029
+    volatility_xrp: 0.0083
+    tier_0_z_score: 0.5338     # 提高门槛，过滤杂音
+    tier_1_z_score: 1.6695
+    tier_2_z_score: 2.2175
+    tier_3_z_score: 3.0734
+    tier_4_z_score: 2.4910
+    min_edge_tier_0: -0.5542    # 弱信号要求大优势
+    min_edge_tier_1: -0.9389
+    min_edge_tier_2: -0.1059
+    min_edge_tier_3: -0.8597
+    min_edge_tier_4: -0.9197    # [重点] 即使强信号，也必须有 1分钱优势
