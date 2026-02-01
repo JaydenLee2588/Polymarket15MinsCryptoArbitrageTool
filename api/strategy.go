@@ -409,6 +409,10 @@ func runSimulationLoop(configs []StrategyConfig) {
 							if now.After(expireBuffer) {
 								if state.Leg1Filled {
 									log.Printf("⏰ [%s] 轮次过期，移入等待决议: %s", configID, slug)
+									// 确保内层 map 已初始化，防止 nil map panic
+									if allPendingResolutions[configID] == nil {
+										allPendingResolutions[configID] = make(map[string]*MarketState)
+									}
 									allPendingResolutions[configID][slug] = state
 								}
 								delete(states, slug)
@@ -724,6 +728,11 @@ func scanAndSubscribeWithManager(
 		}
 
 		for _, cfg := range configs {
+			// 确保内层 map 已初始化，防止 nil map panic
+			if allConfigStates[cfg.ID] == nil {
+				allConfigStates[cfg.ID] = make(map[string]*MarketState)
+			}
+
 			if _, exists := allConfigStates[cfg.ID][market.Slug]; exists {
 				continue
 			}
@@ -842,6 +851,11 @@ func scanAndSubscribe(
 		}
 
 		for _, cfg := range configs {
+			// 确保内层 map 已初始化，防止 nil map panic
+			if allConfigStates[cfg.ID] == nil {
+				allConfigStates[cfg.ID] = make(map[string]*MarketState)
+			}
+
 			if _, exists := allConfigStates[cfg.ID][market.Slug]; exists {
 				continue
 			}
