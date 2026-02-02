@@ -48,6 +48,9 @@ type BinanceKlineClient struct {
 	lastMessageMu   sync.RWMutex // 保护 lastMessageTime
 	reconnecting    bool         // 是否正在重连中
 	reconnectMu     sync.Mutex   // 防止并发重连
+
+	// 关闭状态 (防止重复关闭 panic)
+	closeOnce sync.Once
 }
 
 // binanceStreamMsg 币安流式消息外层
@@ -428,13 +431,15 @@ func (c *BinanceKlineClient) GetAllTrends() map[string]*KlineData {
 	return result
 }
 
-// Close 关闭连接
+// Close 关闭连接 (幂等，可多次调用)
 func (c *BinanceKlineClient) Close() {
-	close(c.done)
-	if c.conn != nil {
-		c.conn.Close()
-	}
-	c.logger.Info("🔌 [Binance] WebSocket 已关闭")
+	c.closeOnce.Do(func() {
+		close(c.done)
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		c.logger.Info("🔌 [Binance] WebSocket 已关闭")
+	})
 }
 
 // toLower 将字符串转为小写 (简单实现，避免引入 strings 包)
