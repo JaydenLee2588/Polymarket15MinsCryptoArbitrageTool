@@ -30,7 +30,7 @@ groups:
   - id: "基本2号"
     min_trend_percent_up: 0.0026      # 这个降成0.18会输很惨，从0.2提到0.26，胜率微降，收益增加
     min_trend_percent_down: 0.0026    # 这个降成0.18会输很惨，从0.22提到0.26，胜率微降，收益增加
-    trend_window_sec_start: 300
+    trend_window_sec_start: 320
     trend_window_sec_end: 480   # 似乎7分20秒未到尽头，赚的很多。         
     leg0_share_price_0: 0.62          
     leg1_share_price_1: 0.71
@@ -58,14 +58,14 @@ groups:
     min_edge_tier_4: 0.01 
 
   - id: "基本3号"
-    min_trend_percent_up: 0.00375    # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
-    min_trend_percent_down: 0.00375  # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
+    min_trend_percent_up: 0.0038    # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
+    min_trend_percent_down: 0.0038  # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
     trend_window_sec_start: 350   
     trend_window_sec_end: 530       # 这个增加到590时，差别不大，成功率有略微下降。但是530时，成功率上升了，收益也增加了
     leg0_share_price_0: 0.55      
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78      
-    leg1_share_price_3: 0.86      
+    leg1_share_price_3: 0.84      
     leg1_share_amount_1: 100
     leg1_share_amount_2: 50
     leg1_share_amount_3: 25
@@ -122,27 +122,28 @@ groups:
     min_trend_percent_down: 0.004
     trend_window_sec_start: 305     # 330之前似乎有赚
     trend_window_sec_end: 390       # 390之后亏损增加         
-    leg0_share_price_0: 0.10          
-    leg1_share_price_1: 0.65
-    leg1_share_price_2: 0.80
-    leg1_share_price_3: 0.87
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.84
     leg1_share_amount_1: 100
     leg1_share_amount_2: 50
     leg1_share_amount_3: 25
+    scan_interval_sec: 0
     max_slippage: 0.03
-    price_tick_size: 0.01 
-    sigmoid_sensitivity: 4.1          
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 4.1
     volatility_btc: 0.002
     volatility_eth: 0.002
     volatility_sol: 0.002
     volatility_xrp: 0.002
-    tier_0_z_score: 0.6               
-    tier_1_z_score: 1.6               
-    tier_2_z_score: 2.2               
-    tier_3_z_score: 2.5               
-    tier_4_z_score: 3.0
-    min_edge_tier_0: -0.50
-    min_edge_tier_1: -0.50
-    min_edge_tier_2: -0.50
-    min_edge_tier_3: -0.50
-    min_edge_tier_4: -0.50
+    tier_0_z_score: 0.5
+    tier_1_z_score: 1.6
+    tier_2_z_score: 2.2
+    tier_3_z_score: 2.5
+    tier_4_z_score: 3
+    min_edge_tier_0: -0.5
+    min_edge_tier_1: -0.5
+    min_edge_tier_2: -0.5
+    min_edge_tier_3: -0.5
+    min_edge_tier_4: -0.5
