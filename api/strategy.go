@@ -325,6 +325,9 @@ func runSimulationLoop(configs []StrategyConfig) {
 
 	// 定时器
 	scanInterval := configs[0].ScanIntervalSec
+	if scanInterval <= 0 {
+		scanInterval = 30 // Default to 30 seconds if not set or invalid
+	}
 	restTicker := time.NewTicker(time.Duration(scanInterval) * time.Second)
 	resTicker := time.NewTicker(60 * time.Second)
 	heartbeatTicker := time.NewTicker(30 * time.Second) // 更频繁检测数据流状态 (30s)
