@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,14 +17,61 @@ import (
 	"Polymarket15MinsCryptoArbitrageTool/api"
 	"Polymarket15MinsCryptoArbitrageTool/bot"
 	"Polymarket15MinsCryptoArbitrageTool/internal/database"
+	"Polymarket15MinsCryptoArbitrageTool/src"
 
 	"github.com/joho/godotenv"
 )
 
+// 命令行参数
+var (
+	enableTUI = flag.Bool("tui", false, "启用 TUI 套利监控面板")
+)
+
 func main() {
+	// 解析命令行参数
+	flag.Parse()
+
 	// 加载环境变量
 	if err := godotenv.Load(); err != nil {
 		log.Printf("⚠️ 加载 .env 文件失败: %v (使用系统环境变量)", err)
+	}
+
+	// 如果启用 TUI 模式，启动 TUI 监控
+	var tuiMonitor *src.ArbitrageTUI
+	if *enableTUI {
+		log.Println("🖥️ TUI 套利监控模式已启用")
+		tuiMonitor = src.NewArbitrageTUI(src.TUIConfig{
+			RefreshRate: 1 * time.Second,
+			GetMarketInfo: func() src.TUIMarketInfo {
+				info := api.GetMarketInfo()
+				return src.TUIMarketInfo{
+					UpPrice:     info.UpPrice,
+					DownPrice:   info.DownPrice,
+					Slug:        info.Slug,
+					Symbol:      info.Symbol,
+					EndTime:     info.EndTime,
+					StrikePrice: info.StrikePrice,
+					HasData:     info.HasData,
+				}
+			},
+			GetStrategyConfigs: func() []src.TUIStrategyConfig {
+				// 从 api.GetCurrentConfigs 转换为 TUIStrategyConfig
+				configs := api.GetCurrentConfigs()
+				result := make([]src.TUIStrategyConfig, len(configs))
+				for i, cfg := range configs {
+					result[i] = src.TUIStrategyConfig{
+						ID:               cfg.ID,
+						MinPriceEdge:     cfg.MinPriceEdge,
+						SharePriceLevel3: cfg.SharePriceLevel3,
+						TradingMode:      cfg.TradingMode,
+					}
+				}
+				return result
+			},
+			IsStrategyRunning: api.IsStrategyRunning,
+		})
+		// 禁用标准日志输出，避免干扰 TUI 显示
+		log.SetOutput(io.Discard)
 	}
 
 	// 初始化内部 SQLite 数据库
@@ -115,11 +164,50 @@ func main() {
 		}
 	}()
 
+	// 启动 TUI 监控 (如果启用)
+	if tuiMonitor != nil {
+		go tuiMonitor.Start()
+		log.Println("📊 TUI 套利监控已启动")
+	}
+
+	// ========== 加载并启动 Pattern 策略 ==========
+	enablePatternStrategy := getEnv("ENABLE_PATTERN_STRATEGY", "true")
+	patternConfigFile := getEnv("PATTERN_CONFIG_FILE", "strategy_config_3.yaml")
+
+	if enablePatternStrategy != "true" {
+		log.Println("ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)")
+	} else if _, err := os.Stat(patternConfigFile); err == nil {
+		patternConfigs, err := api.LoadPatternConfigs(patternConfigFile)
+		if err != nil {
+			log.Printf("⚠️ 加载 Pattern 配置失败: %v", err)
+		} else if len(patternConfigs) > 0 {
+			log.Printf("📋 已加载 Pattern 配置: %s (%d 个策略组)", patternConfigFile, len(patternConfigs))
+			// Pattern 策略需要依赖主策略的市场数据，延迟启动
+			go func() {
+				// 等待主策略初始化市场数据
+				time.Sleep(5 * time.Second)
+				api.StartPatternStrategy(patternConfigs)
+			}()
+		}
+	} else {
+		log.Printf("ℹ️ Pattern 配置文件不存在: %s，跳过 Pattern 策略", patternConfigFile)
+	}
+
 	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 	log.Println("🛑 正在关闭服务器...")
+
+	// 停止 TUI 监控
+	if tuiMonitor != nil {
+		tuiMonitor.Stop()
+	}
+
+	// 停止 Pattern 策略
+	if api.IsPatternStrategyRunning() {
+		api.StopPatternStrategy()
+	}
 
 	// 创建 5 秒超时的 context
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

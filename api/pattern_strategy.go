@@ -1,0 +1,1176 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"Polymarket15MinsCryptoArbitrageTool/internal/database"
+	"Polymarket15MinsCryptoArbitrageTool/src"
+)
+
+// ==================== Pattern 策略状态 ====================
+
+// PatternPosition 持仓状态
+type PatternPosition struct {
+	ConfigID      string
+	MarketSlug    string
+	Symbol        string
+	Side          string    // "UP" or "DOWN"
+	TokenID       string    // 持仓 Token ID
+	BuyPrice      float64   // 买入价格
+	Amount        float64   // 持仓数量
+	Cost          float64   // 成本 (BuyPrice * Amount)
+	BuyTime       time.Time // 买入时间
+	RecordID      int64     // 数据库记录 ID
+	Pending       bool      // 是否正在下单中 (防止重复下单)
+	Resolved      bool      // 是否已决议
+	SellFailCount int       // 卖出失败次数 (用于重试限制)
+
+	// 买入时的指标快照 (用于交易历史日志)
+	BuyIndicators struct {
+		VWAPDist      float64
+		MACDLine      float64
+		MACDSignal    float64
+		MACDHistogram float64
+		MACDHistDelta float64
+		RSI           float64
+		RSISlope      float64
+	}
+
+	// 市场开始时间 (计算开局后几分钟)
+	MarketStartTime time.Time
+}
+
+// PatternMarketState 市场状态
+type PatternMarketState struct {
+	Slug          string
+	Symbol        string
+	StartTime     time.Time
+	EndTime       time.Time
+	TokenIDToSide map[string]string
+	SideToTokenID map[string]string
+	LatestPrices  map[string]float64
+	StrikePrice   float64
+
+	// 持仓
+	Positions map[string]*PatternPosition // configID -> Position
+
+	// Pattern 检测缓存 (避免重复检测)
+	LastPatternCheck map[string]time.Time       // configID -> 上次检测时间
+	LastPattern      map[string]src.PatternType // symbol -> 上次检测到的 Pattern
+}
+
+// BuyIndicatorSnapshot 买入时的指标快照
+type BuyIndicatorSnapshot struct {
+	VWAPDist      float64
+	MACDLine      float64
+	MACDSignal    float64
+	MACDHistogram float64
+	MACDHistDelta float64
+	RSI           float64
+	RSISlope      float64
+}
+
+// Pattern 策略全局状态
+var (
+	patternStrategyMu      sync.Mutex
+	patternStrategyRunning bool
+	patternStopChan        chan struct{}
+	patternDoneChan        chan struct{}
+
+	// 市场状态 (复用主策略的 MarketManager)
+	patternMarketStates   map[string]*PatternMarketState // slug -> state
+	patternMarketStatesMu sync.RWMutex
+)
+
+// ==================== 策略启动/停止 ====================
+
+// StartPatternStrategy 启动 Pattern 策略
+func StartPatternStrategy(configs []PatternStrategyConfig) bool {
+	patternStrategyMu.Lock()
+	defer patternStrategyMu.Unlock()
+
+	if patternStrategyRunning {
+		log.Println("⚠️ Pattern 策略已在运行")
+		return false
+	}
+
+	if len(configs) == 0 {
+		log.Println("⚠️ 没有 Pattern 策略配置")
+		return false
+	}
+
+	patternStopChan = make(chan struct{})
+	patternDoneChan = make(chan struct{})
+	patternMarketStates = make(map[string]*PatternMarketState)
+	patternStrategyRunning = true
+
+	// ===== 恢复数据库中的持仓 =====
+	RestorePatternPositions()
+
+	// ===== 确保 Binance WebSocket 客户端已初始化 =====
+	initPatternBinanceClient()
+
+	// ===== 初始化交易历史日志 =====
+	if err := InitTradeHistoryLogger(); err != nil {
+		log.Printf("⚠️ [Pattern] 交易历史日志初始化失败: %v", err)
+	}
+
+	go runPatternStrategyLoop(configs)
+
+	log.Printf("🎯 Pattern 策略已启动 - %d 个配置组", len(configs))
+	for _, cfg := range configs {
+		patternNames := make([]string, len(cfg.Patterns))
+		for i, p := range cfg.Patterns {
+			patternNames[i] = string(p)
+		}
+		log.Printf("   📝 [%s] Patterns: %v, Symbols: %v, SellThreshold: %.2f",
+			cfg.ID, patternNames, cfg.Symbols, cfg.SellThreshold)
+	}
+
+	return true
+}
+
+// StopPatternStrategy 停止 Pattern 策略
+func StopPatternStrategy() bool {
+	patternStrategyMu.Lock()
+
+	if !patternStrategyRunning {
+		patternStrategyMu.Unlock()
+		log.Println("⚠️ Pattern 策略未在运行")
+		return false
+	}
+
+	patternStrategyRunning = false
+	close(patternStopChan)
+	doneChan := patternDoneChan
+	patternStrategyMu.Unlock()
+
+	// 等待退出
+	select {
+	case <-doneChan:
+		log.Println("✅ Pattern 策略已停止")
+		return true
+	case <-time.After(10 * time.Second):
+		log.Println("⚠️ Pattern 策略停止超时")
+		return true
+	}
+}
+
+// IsPatternStrategyRunning 检查 Pattern 策略是否运行
+func IsPatternStrategyRunning() bool {
+	patternStrategyMu.Lock()
+	defer patternStrategyMu.Unlock()
+	return patternStrategyRunning
+}
+
+// ==================== 策略主循环 ====================
+
+// patternCheckTask 用于传递检测任务 (避免在锁内执行耗时操作)
+type patternCheckTask struct {
+	State  *PatternMarketState
+	Config PatternStrategyConfig
+	IsSell bool // true=检查卖出, false=检查买入
+}
+
+func runPatternStrategyLoop(configs []PatternStrategyConfig) {
+	defer close(patternDoneChan)
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	log.Println("💓 [Pattern] 策略循环已启动")
+
+	for {
+		select {
+		case <-patternStopChan:
+			log.Println("🛑 [Pattern] 收到停止信号")
+			return
+
+		case <-ticker.C:
+			// 同步市场状态
+			syncPatternMarketStates()
+
+			// ===== 修复死锁: 先收集任务，释放锁后再执行 =====
+			var tasks []patternCheckTask
+
+			patternMarketStatesMu.RLock()
+			for _, state := range patternMarketStates {
+				for _, cfg := range configs {
+					// 检查是否支持该币种 (使用前缀匹配)
+					if !cfg.ContainsSymbolPrefix(state.Symbol) {
+						continue
+					}
+
+					elapsed := time.Since(state.StartTime).Seconds()
+
+					// 检查是否已有持仓 (包括 pending 状态)
+					if state.Positions != nil {
+						if pos, ok := state.Positions[cfg.ID]; ok && pos != nil {
+							// 已有持仓，检查卖出条件 (卖出不受时间窗口限制)
+							tasks = append(tasks, patternCheckTask{
+								State:  state,
+								Config: cfg,
+								IsSell: true,
+							})
+							continue
+						}
+					}
+
+					// 买入检测需要在时间窗口内
+					if elapsed < float64(cfg.TrendWindowSecStart) || elapsed > float64(cfg.TrendWindowSecEnd) {
+						continue
+					}
+
+					// 检测 Pattern (5秒内不重复检测同一配置)
+					if state.LastPatternCheck != nil {
+						if lastCheck, ok := state.LastPatternCheck[cfg.ID]; ok {
+							if time.Since(lastCheck) < 5*time.Second {
+								continue
+							}
+						}
+					}
+
+					tasks = append(tasks, patternCheckTask{
+						State:  state,
+						Config: cfg,
+						IsSell: false,
+					})
+				}
+			}
+			patternMarketStatesMu.RUnlock()
+
+			// ===== 检查过期持仓并移入决议队列 =====
+			checkPatternPositionExpiry()
+
+			// ===== 在锁外执行检测任务 =====
+			for _, task := range tasks {
+				if task.IsSell {
+					// 卖出检测
+					patternMarketStatesMu.RLock()
+					pos := task.State.Positions[task.Config.ID]
+					patternMarketStatesMu.RUnlock()
+					if pos != nil && !pos.Pending {
+						checkPatternSellCondition(task.State, pos, task.Config)
+					}
+				} else {
+					// 买入检测
+					checkPatternBuySignal(task.State, task.Config)
+				}
+			}
+		}
+	}
+}
+
+// ==================== 市场状态同步 ====================
+
+// syncPatternMarketStates 从主策略同步市场状态
+func syncPatternMarketStates() {
+	// 获取主策略的市场状态
+	mainStates := GetActiveMarketStates()
+	if mainStates == nil {
+		return
+	}
+
+	patternMarketStatesMu.Lock()
+	defer patternMarketStatesMu.Unlock()
+
+	// 遍历主策略的所有配置组
+	for _, configStates := range mainStates {
+		for slug, mainState := range configStates {
+			if mainState == nil {
+				continue
+			}
+
+			// 检查是否已存在
+			if _, exists := patternMarketStates[slug]; !exists {
+				// 创建新的 Pattern 市场状态
+				patternMarketStates[slug] = &PatternMarketState{
+					Slug:             mainState.Slug,
+					Symbol:           mainState.Symbol,
+					StartTime:        mainState.StartTime,
+					EndTime:          mainState.EndTime,
+					TokenIDToSide:    mainState.TokenIDToSide,
+					SideToTokenID:    mainState.SideToTokenID,
+					LatestPrices:     make(map[string]float64),
+					StrikePrice:      mainState.StrikePrice,
+					Positions:        make(map[string]*PatternPosition),
+					LastPatternCheck: make(map[string]time.Time),
+				}
+			}
+
+			// 同步价格
+			state := patternMarketStates[slug]
+			for side, price := range mainState.LatestPrices {
+				state.LatestPrices[side] = price
+			}
+		}
+	}
+
+	// 清理过期市场 (保护有未决议持仓的状态)
+	// 先收集要删除的 slugs，避免在迭代中删除 (会导致 concurrent map iteration panic)
+	now := time.Now()
+	var expiredSlugs []string
+	for slug, state := range patternMarketStates {
+		// 只有在市场过期 AND 没有持仓时才删除
+		if now.After(state.EndTime.Add(5*time.Minute)) && len(state.Positions) == 0 {
+			expiredSlugs = append(expiredSlugs, slug)
+		}
+	}
+
+	// 安全删除过期市场
+	for _, slug := range expiredSlugs {
+		delete(patternMarketStates, slug)
+	}
+}
+
+// ==================== Pattern 检测与买入 ====================
+
+func checkPatternBuySignal(state *PatternMarketState, cfg PatternStrategyConfig) {
+	binanceSymbol := state.Symbol + "USDT"
+
+	// ===== 复用主策略的 Binance WebSocket K线数据 =====
+	if binanceClient == nil {
+		return
+	}
+
+	klines := binanceClient.GetHistoricalKlines(binanceSymbol, 240)
+	if len(klines) < 50 {
+		return
+	}
+
+	closes := src.GetCloses(klines)
+	currentPrice := closes[len(closes)-1]
+
+	// 计算技术指标
+	rsi14 := src.ComputeRSI(closes, 14)
+	rsiSlope := src.SlopeLast(src.ComputeRSISeries(closes, 14), 3)
+	macd := src.ComputeMACD(closes, 12, 26, 9)
+	vwap := src.ComputeSessionVWAP(klines)
+	vwapDist := (currentPrice - vwap) / vwap
+
+	// 计算前一个 RSI
+	prevRSI := 50.0
+	if len(closes) > 15 {
+		prevRSI = src.ComputeRSI(closes[:len(closes)-1], 14)
+	}
+
+	// 调用 Pattern 检测
+	patternInput := src.PatternDetectInput{
+		VWAPDist: vwapDist,
+		MACD:     macd,
+		RSI:      rsi14,
+		RSISlope: rsiSlope,
+		PrevRSI:  prevRSI,
+	}
+	result := src.DetectPattern(patternInput)
+
+	// ===== Pattern 变化日志 =====
+	patternMarketStatesMu.Lock()
+	if state.LastPatternCheck == nil {
+		state.LastPatternCheck = make(map[string]time.Time)
+	}
+	if state.LastPattern == nil {
+		state.LastPattern = make(map[string]src.PatternType)
+	}
+	state.LastPatternCheck[cfg.ID] = time.Now()
+
+	// 检测 Pattern 是否变化 (使用 Slug 作为 key)
+	patternKey := state.Slug
+	prevPattern, hasPrev := state.LastPattern[patternKey]
+
+	// 日志去重: 只有当 Pattern 发生变化时才记录
+	// 并且为了防止多策略组同时打印，我们可以检查是否是第一个检测到的策略组
+	// 但最简单的是：只要 Pattern 变了就打
+	shouldLog := !hasPrev || prevPattern != result.PatternType
+
+	if shouldLog {
+		confidenceDesc := getConfidenceDescription(result.Confidence)
+		if hasPrev && prevPattern != result.PatternType {
+			prevName := src.GetPatternChineseName(prevPattern)
+			log.Printf("🔄 [Pattern] %s 形态变化: %s → %s (置信度=%.2f %s)",
+				state.Symbol, prevName, result.PatternName, result.Confidence, confidenceDesc)
+		} else if !hasPrev && result.PatternType != src.PatternNeutral {
+			log.Printf("📊 [Pattern] %s 首次检测: %s (置信度=%.2f %s)",
+				state.Symbol, result.PatternName, result.Confidence, confidenceDesc)
+		}
+		// 更新状态
+		state.LastPattern[patternKey] = result.PatternType
+	}
+	patternMarketStatesMu.Unlock()
+
+	// 检查是否匹配配置的 Pattern
+	if !cfg.ContainsPattern(result.PatternType) {
+		return
+	}
+
+	// 确定买入方向
+	var side string
+	if result.IsBuyUp() {
+		side = "UP"
+	} else if result.IsBuyDown() {
+		side = "DOWN"
+	} else {
+		return // 不是买入信号
+	}
+
+	// 获取价格
+	price, ok := state.LatestPrices[side]
+	if !ok || price <= 0 {
+		return
+	}
+
+	// 检查价格范围
+	amount := cfg.GetShareAmount(price)
+	if amount <= 0 {
+		return
+	}
+
+	// 获取 TokenID
+	tokenID, ok := state.SideToTokenID[side]
+	if !ok || tokenID == "" {
+		return
+	}
+
+	// ===== 防止重复下单: 先标记为 pending =====
+	patternMarketStatesMu.Lock()
+	if state.Positions == nil {
+		state.Positions = make(map[string]*PatternPosition)
+	}
+	if existing, ok := state.Positions[cfg.ID]; ok && existing != nil {
+		patternMarketStatesMu.Unlock()
+		return // 已有持仓或正在下单
+	}
+	// 设置 pending 占位
+	state.Positions[cfg.ID] = &PatternPosition{
+		ConfigID: cfg.ID,
+		Pending:  true,
+	}
+	patternMarketStatesMu.Unlock()
+
+	log.Printf("🎯 [Pattern][%s] 检测到形态: %s, 市场=%s, 方向=%s, 价格=%.4f",
+		cfg.ID, result.PatternName, state.Slug, side, price)
+
+	// 构建指标快照用于日志
+	buyIndicators := BuyIndicatorSnapshot{
+		VWAPDist: vwapDist,
+		RSI:      rsi14,
+		RSISlope: rsiSlope,
+	}
+	if macd != nil {
+		buyIndicators.MACDLine = macd.MACD
+		buyIndicators.MACDSignal = macd.Signal
+		buyIndicators.MACDHistogram = macd.Histogram
+		buyIndicators.MACDHistDelta = macd.HistDelta
+	}
+
+	// 执行买入
+	executePatternBuy(state, cfg, side, tokenID, price, amount, result.PatternName, buyIndicators)
+}
+
+// executePatternBuy 执行 Pattern 策略买入
+func executePatternBuy(state *PatternMarketState, cfg PatternStrategyConfig, side, tokenID string, price, amount float64, patternName string, indicators BuyIndicatorSnapshot) {
+	now := time.Now()
+	cost := price * amount
+	filledPrice := price
+	filledAmount := amount
+	realOrderID := ""
+
+	// 准备日志条目 (无论成功失败都要记录)
+	logEntry := &TradeLogEntry{
+		BuyTime:         now,
+		ConfigID:        cfg.ID,
+		MarketSlug:      state.Slug,
+		MarketStartTime: state.StartTime,
+		Side:            side,
+		Amount:          amount,
+		BuyPrice:        price,
+		TotalCost:       cost,
+		VWAPDist:        indicators.VWAPDist,
+		MACDLine:        indicators.MACDLine,
+		MACDSignal:      indicators.MACDSignal,
+		MACDHistogram:   indicators.MACDHistogram,
+		MACDHistDelta:   indicators.MACDHistDelta,
+		RSI:             indicators.RSI,
+		RSISlope:        indicators.RSISlope,
+	}
+
+	// ========== 真实交易模式 ==========
+	if cfg.TradingMode == "real" {
+		clobClientMu.Lock()
+		client := clobOrderClient
+		clobClientMu.Unlock()
+
+		if client == nil {
+			log.Printf("❌ [Pattern][%s] 真实交易模式但 ClobOrderClient 未初始化", cfg.ID)
+			// 清除 pending 状态
+			patternMarketStatesMu.Lock()
+			delete(state.Positions, cfg.ID)
+			patternMarketStatesMu.Unlock()
+			LogBuyFailure(logEntry, "ClobOrderClient 未初始化")
+			return
+		}
+
+		// 确保 Cost 有效
+		if cost <= 0 {
+			cost = price * amount
+			if cost <= 0 {
+				log.Printf("❌ [Pattern][%s] 成本计算错误: cost=%.4f (price=%.4f, amount=%.4f)",
+					cfg.ID, cost, price, amount)
+				// 清除 pending 状态
+				patternMarketStatesMu.Lock()
+				delete(state.Positions, cfg.ID)
+				patternMarketStatesMu.Unlock()
+				LogBuyFailure(logEntry, "成本计算错误")
+				return
+			}
+		}
+
+		// 下单
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		finalPrice := price + cfg.MaxSlippage
+
+		var orderResult *src.ClobOrderResult
+		var orderErr error
+
+		if cfg.OrderType == "GTC" {
+			orderResult, orderErr = client.PlaceLimitBuyOrder(ctx, tokenID, finalPrice, amount)
+		} else if cfg.OrderType == "FAK" {
+			orderResult, orderErr = client.PlaceMarketBuyOrderFAK(ctx, tokenID, finalPrice, amount, 30)
+		} else {
+			orderResult, orderErr = client.PlaceMarketBuyOrder(ctx, tokenID, finalPrice, amount, 30)
+		}
+		cancel()
+
+		if orderErr != nil {
+			log.Printf("❌ [Pattern][%s] 下单失败: %v", cfg.ID, orderErr)
+			// 清除 pending 状态
+			patternMarketStatesMu.Lock()
+			delete(state.Positions, cfg.ID)
+			patternMarketStatesMu.Unlock()
+			LogBuyFailure(logEntry, fmt.Sprintf("下单失败: %v", orderErr))
+			return
+		}
+
+		if !orderResult.Success {
+			log.Printf("❌ [Pattern][%s] 下单被拒绝: %s", cfg.ID, orderResult.ErrorMsg)
+			// 清除 pending 状态
+			patternMarketStatesMu.Lock()
+			delete(state.Positions, cfg.ID)
+			patternMarketStatesMu.Unlock()
+			LogBuyFailure(logEntry, fmt.Sprintf("下单被拒绝: %s", orderResult.ErrorMsg))
+			return
+		}
+
+		realOrderID = orderResult.OrderID
+		log.Printf("✅ [Pattern][%s] 真实下单成功: OrderID=%s", cfg.ID, realOrderID)
+	}
+
+	// 记录日志
+	modeTag := "模拟"
+	if cfg.TradingMode == "real" {
+		modeTag = "💰真实"
+	}
+
+	log.Printf("✅ [Pattern][%s][%s] 买入成功 | 市场=%s | 方向=%s | Pattern=%s | 价格=%.4f | 数量=%.2f | 成本=$%.2f",
+		modeTag, cfg.ID, state.Slug, side, patternName, filledPrice, filledAmount, cost)
+
+	// 保存到数据库 (包含 TokenID 和 Symbol 用于恢复)
+	trade := &database.SimulationTrade{
+		ConfigGroup: "Pattern-" + cfg.ID,
+		MarketSlug:  state.Slug,
+		Stage:       "Leg1",
+		Side:        side,
+		Price:       filledPrice,
+		Amount:      filledAmount,
+		Cost:        cost,
+		TokenID:     tokenID,
+		Symbol:      state.Symbol,
+	}
+
+	id, err := database.InsertTrade(trade)
+	if err != nil {
+		log.Printf("❌ [Pattern] 保存交易记录失败: %v", err)
+	}
+
+	// 更新持仓 (替换 pending 占位)
+	patternMarketStatesMu.Lock()
+	pos := &PatternPosition{
+		ConfigID:        cfg.ID,
+		MarketSlug:      state.Slug,
+		Symbol:          state.Symbol,
+		Side:            side,
+		TokenID:         tokenID,
+		BuyPrice:        filledPrice,
+		Amount:          filledAmount,
+		Cost:            cost, // 用于 PnL 计算
+		BuyTime:         now,
+		RecordID:        id,
+		Pending:         false,
+		MarketStartTime: state.StartTime,
+	}
+	// 保存指标快照
+	pos.BuyIndicators.VWAPDist = indicators.VWAPDist
+	pos.BuyIndicators.MACDLine = indicators.MACDLine
+	pos.BuyIndicators.MACDSignal = indicators.MACDSignal
+	pos.BuyIndicators.MACDHistogram = indicators.MACDHistogram
+	pos.BuyIndicators.MACDHistDelta = indicators.MACDHistDelta
+	pos.BuyIndicators.RSI = indicators.RSI
+	pos.BuyIndicators.RSISlope = indicators.RSISlope
+
+	state.Positions[cfg.ID] = pos
+	patternMarketStatesMu.Unlock()
+
+	// 记录交易历史日志 (买入成功)
+	LogBuyEntry(logEntry)
+
+	// ===== 真实交易模式下，异步同步实际余额 =====
+	if cfg.TradingMode == "real" {
+		go syncPositionBalance(state.Slug, cfg.ID, tokenID)
+	}
+}
+
+// ==================== 卖出检测 ====================
+
+func checkPatternSellCondition(state *PatternMarketState, pos *PatternPosition, cfg PatternStrategyConfig) {
+	// 跳过已失败多次的持仓 (等待决议)
+	if pos.SellFailCount >= 5 {
+		return
+	}
+
+	// 获取当前价格
+	currentPrice, ok := state.LatestPrices[pos.Side]
+	if !ok || currentPrice <= 0 {
+		return
+	}
+
+	// 1. 检查时间止损 (优先于盈利检查，防止最后归零)
+	// 注意: 如果 EndTime 为零值 (恢复的持仓可能没有 EndTime)，跳过时间止损
+	if cfg.EnableStopLoss && !state.EndTime.IsZero() {
+		timeLeft := time.Until(state.EndTime)
+		stopLossDuration := time.Duration(cfg.StopLossMinutesBeforeClose) * time.Minute
+		if stopLossDuration <= 0 {
+			stopLossDuration = 3 * time.Minute // 默认 3 分钟
+		}
+
+		if timeLeft < stopLossDuration && timeLeft > -1*time.Hour {
+			// timeLeft > -1*time.Hour 确保不会对已过期很久的市场触发
+			log.Printf("⏰ [Pattern][%s] 时间止损触发! 剩余 %.1f 分钟 (阈值 %d 分) | 买入=%.4f | 当前=%.4f",
+				cfg.ID, timeLeft.Minutes(), cfg.StopLossMinutesBeforeClose, pos.BuyPrice, currentPrice)
+			executePatternSellWithReason(state, pos, cfg, currentPrice, "时间止损")
+			return
+		}
+	}
+
+	// 2. 检查是否达到卖出阈值 (止盈)
+	priceGain := currentPrice - pos.BuyPrice
+	if priceGain < cfg.SellThreshold {
+		return
+	}
+
+	log.Printf("💰 [Pattern][%s] 达到卖出阈值! 市场=%s | 买入=%.4f | 当前=%.4f | 收益=%.4f",
+		cfg.ID, state.Slug, pos.BuyPrice, currentPrice, priceGain)
+
+	// 执行卖出
+	executePatternSell(state, pos, cfg, currentPrice)
+}
+
+// executePatternSell 执行 Pattern 策略卖出
+func executePatternSell(state *PatternMarketState, pos *PatternPosition, cfg PatternStrategyConfig, sellPrice float64) {
+	executePatternSellWithReason(state, pos, cfg, sellPrice, "止盈")
+}
+
+// executePatternSellWithReason 执行卖出并指定原因
+func executePatternSellWithReason(state *PatternMarketState, pos *PatternPosition, cfg PatternStrategyConfig, sellPrice float64, sellReason string) {
+	originalAmount := pos.Amount
+	filledAmount := pos.Amount // 默认假设全部成交 (模拟模式)
+	actualSellPrice := sellPrice
+
+	// ========== 真实交易模式 ==========
+	if cfg.TradingMode == "real" {
+		clobClientMu.Lock()
+		client := clobOrderClient
+		clobClientMu.Unlock()
+
+		if client == nil {
+			log.Printf("❌ [Pattern][%s] 真实交易模式但 ClobOrderClient 未初始化", cfg.ID)
+			return
+		}
+
+		// 卖出 (以略低于当前价格挂单)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		finalPrice := sellPrice - cfg.MaxSlippage
+		if finalPrice < 0.01 {
+			finalPrice = 0.01
+		}
+
+		var orderResult *src.ClobOrderResult
+		var orderErr error
+
+		// 使用 FAK 卖单 (立即成交能成交的部分，剩余取消)
+		orderResult, orderErr = client.PlaceMarketSellOrderFAK(ctx, pos.TokenID, finalPrice, pos.Amount, 30)
+		cancel()
+
+		if orderErr != nil {
+			pos.SellFailCount++
+			if pos.SellFailCount >= 5 {
+				log.Printf("❌ [Pattern][%s] 卖出失败超过5次，停止重试: %v", cfg.ID, orderErr)
+			} else {
+				log.Printf("⚠️ [Pattern][%s] 卖出失败 (%d/5): %v", cfg.ID, pos.SellFailCount, orderErr)
+			}
+			return
+		}
+
+		if !orderResult.Success {
+			// 检查是否是"余额不足"错误 - 这意味着持仓已经被卖出(可能上次成功但没返回正确的FilledSize)
+			if strings.Contains(orderResult.ErrorMsg, "not enough balance") ||
+				strings.Contains(orderResult.ErrorMsg, "allowance") {
+				log.Printf("⚠️ [Pattern][%s] 余额不足错误，持仓可能已被卖出，清除持仓状态", cfg.ID)
+
+				// 清除持仓 (假设已经卖出)
+				patternMarketStatesMu.Lock()
+				delete(state.Positions, cfg.ID)
+				patternMarketStatesMu.Unlock()
+
+				// 更新数据库为 SOLD (PnL 未知，设为 0)
+				if pos.RecordID > 0 {
+					if err := database.UpdateTradeResolution(pos.RecordID, "SOLD_BALANCE_ERROR", 0); err != nil {
+						log.Printf("❌ [Pattern] 更新交易记录失败: %v", err)
+					}
+				}
+				return
+			}
+
+			pos.SellFailCount++
+			if pos.SellFailCount >= 5 {
+				log.Printf("❌ [Pattern][%s] 卖出被拒绝超过5次，停止重试: %s", cfg.ID, orderResult.ErrorMsg)
+			} else {
+				log.Printf("⚠️ [Pattern][%s] 卖出被拒绝 (%d/5): %s", cfg.ID, pos.SellFailCount, orderResult.ErrorMsg)
+			}
+			return
+		}
+
+		// 检查实际成交数量
+		filledAmount = orderResult.FilledSize
+		if orderResult.FilledPrice > 0 {
+			actualSellPrice = orderResult.FilledPrice
+		}
+
+		// 检查是否部分成交
+		if filledAmount <= 0 {
+			// FilledSize 为 0 但订单成功 - 可能是 API 没有返回正确的成交数量
+			// 假设全部成交，继续处理
+			log.Printf("⚠️ [Pattern][%s] 卖单成功但成交数量为0，假设全部成交", cfg.ID)
+			filledAmount = originalAmount
+		}
+
+		if filledAmount < originalAmount {
+			// 部分成交：更新剩余持仓
+			remaining := originalAmount - filledAmount
+			log.Printf("⚠️ [Pattern][%s] 部分成交! 卖出 %.2f/%.2f 股，剩余 %.2f 股",
+				cfg.ID, filledAmount, originalAmount, remaining)
+
+			// 更新持仓数量为剩余数量
+			patternMarketStatesMu.Lock()
+			pos.Amount = remaining
+			pos.Cost = pos.BuyPrice * remaining // 更新剩余成本
+			pos.SellFailCount = 0               // 重置失败计数，继续尝试卖出剩余
+			patternMarketStatesMu.Unlock()
+
+			// 计算已成交部分的收益
+			partialProfit := (actualSellPrice - pos.BuyPrice) * filledAmount
+			log.Printf("✅ [Pattern][💰真实][%s] 部分卖出 | 市场=%s | 成交=%.2f股 | 价格=%.4f | 收益=$%.2f",
+				cfg.ID, state.Slug, filledAmount, actualSellPrice, partialProfit)
+
+			// 不删除持仓，不更新数据库为SOLD（因为还有剩余）
+			return
+		}
+
+		log.Printf("✅ [Pattern][%s] 真实卖出成功: OrderID=%s | 成交=%.2f股", cfg.ID, orderResult.OrderID, filledAmount)
+	}
+
+	// 计算收益 (使用实际成交数量和价格)
+	profit := (actualSellPrice - pos.BuyPrice) * filledAmount
+	revenue := actualSellPrice * filledAmount
+
+	// 记录日志
+	modeTag := "模拟"
+	if cfg.TradingMode == "real" {
+		modeTag = "💰真实"
+	}
+
+	log.Printf("✅ [Pattern][%s][%s] 卖出成功 | 市场=%s | 买入=%.4f | 卖出=%.4f | 数量=%.2f | 收益=$%.2f",
+		modeTag, cfg.ID, state.Slug, pos.BuyPrice, actualSellPrice, filledAmount, profit)
+
+	// 更新数据库
+	if pos.RecordID > 0 {
+		resolution := "SOLD"
+		if err := database.UpdateTradeResolution(pos.RecordID, resolution, profit); err != nil {
+			log.Printf("❌ [Pattern] 更新交易记录失败: %v", err)
+		}
+	}
+
+	// 记录交易历史日志 (卖出)
+	UpdateSellEntry(state.Slug, cfg.ID, sellReason, actualSellPrice, filledAmount, revenue, profit)
+
+	// 清除持仓 (全部成交)
+	patternMarketStatesMu.Lock()
+	delete(state.Positions, cfg.ID)
+	patternMarketStatesMu.Unlock()
+}
+
+// ==================== 余额同步 ====================
+
+// syncPositionBalance 从 Polymarket API 同步实际持仓数量
+// 在买入成功后调用，确保记录的数量与实际持仓一致
+func syncPositionBalance(marketSlug, configID, tokenID string) {
+	// 等待一小段时间让订单完全确认
+	time.Sleep(2 * time.Second)
+
+	// 获取钱包地址
+	walletAddr := os.Getenv("PROXY_WALLET_ADDRESS")
+	if walletAddr == "" {
+		walletAddr = os.Getenv("MAKER_ADDRESS")
+	}
+	if walletAddr == "" {
+		log.Printf("⚠️ [Pattern] 余额同步跳过: 未配置钱包地址")
+		return
+	}
+
+	// 创建 Data API 客户端
+	dataClient := src.NewDataClient(http.DefaultClient)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	positions, err := dataClient.GetPositions(ctx, &src.GetPositionsParams{
+		User:  walletAddr,
+		Limit: 100,
+	})
+	if err != nil {
+		log.Printf("⚠️ [Pattern][%s] 余额同步失败: %v", configID, err)
+		return
+	}
+
+	// 查找匹配的持仓
+	for _, pos := range positions {
+		if pos.Asset == tokenID {
+			actualAmount := pos.Size.InexactFloat64()
+
+			// 更新本地记录
+			patternMarketStatesMu.Lock()
+			state, exists := patternMarketStates[marketSlug]
+			if exists && state.Positions != nil {
+				if position, ok := state.Positions[configID]; ok {
+					if actualAmount != position.Amount {
+						log.Printf("📊 [Pattern][%s] 持仓数量校正: 记录=%.2f → 实际=%.2f",
+							configID, position.Amount, actualAmount)
+						position.Amount = actualAmount
+						position.Cost = position.BuyPrice * actualAmount
+					} else {
+						log.Printf("✅ [Pattern][%s] 持仓数量确认: %.2f 股", configID, actualAmount)
+					}
+				}
+			}
+			patternMarketStatesMu.Unlock()
+			return
+		}
+	}
+
+	log.Printf("⚠️ [Pattern][%s] 余额同步: 未找到 TokenID=%s 的持仓", configID, tokenID[:min(12, len(tokenID))])
+}
+
+// ==================== 辅助函数 ====================
+
+// parseEndTimeFromSlug 从 slug 解析结束时间
+// 格式: btc-updown-15m-1770194700 (最后一部分是市场开始的 Unix 时间戳)
+// 注意: slug 中的时间戳是开始时间，结束时间需要加 15 分钟
+func parseEndTimeFromSlug(slug string) time.Time {
+	parts := strings.Split(slug, "-")
+	if len(parts) >= 4 {
+		// 最后一部分应该是时间戳 (市场开始时间)
+		timestamp, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+		if err == nil && timestamp > 1000000000 { // 基本验证
+			// 市场结束时间 = 开始时间 + 15 分钟
+			return time.Unix(timestamp, 0).Add(15 * time.Minute)
+		}
+	}
+	return time.Time{}
+}
+
+// GetPatternMarketInfo 获取 Pattern 策略的市场信息 (供 TUI 使用)
+func GetPatternMarketInfo(symbol string) *PatternMarketState {
+	patternMarketStatesMu.RLock()
+	defer patternMarketStatesMu.RUnlock()
+
+	for _, state := range patternMarketStates {
+		if state.Symbol == symbol || strings.Contains(strings.ToLower(state.Slug), strings.ToLower(symbol)) {
+			return state
+		}
+	}
+	return nil
+}
+
+// initPatternBinanceClient 初始化 Binance WebSocket 客户端 (如果尚未初始化)
+func initPatternBinanceClient() {
+	simMu.Lock()
+	defer simMu.Unlock()
+
+	// 如果已经初始化，直接返回
+	if binanceClient != nil {
+		log.Println("ℹ️ [Pattern] Binance WebSocket 客户端已存在，复用")
+		return
+	}
+
+	// 初始化 Binance WebSocket 客户端
+	binanceSymbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
+	binanceClient = src.NewBinanceKlineClient(binanceSymbols, src.NewLogger(src.LogLevelInfo))
+
+	if err := binanceClient.Connect(); err != nil {
+		log.Printf("⚠️ [Pattern] Binance WS 连接失败: %v", err)
+		binanceClient = nil
+		return
+	}
+
+	log.Println("✅ [Pattern] Binance WebSocket 客户端已初始化 (15m + 1m K线)")
+}
+
+// getConfidenceDescription 获取置信度的中文描述
+func getConfidenceDescription(confidence float64) string {
+	if confidence >= 0.90 {
+		return "非常确定"
+	}
+	if confidence >= 0.70 {
+		return "较为确定"
+	}
+	if confidence >= 0.50 {
+		return "一般确定"
+	}
+	return "不太确定"
+}
+
+// checkPatternPositionExpiry 检查 Pattern 持仓过期并处理决议
+func checkPatternPositionExpiry() {
+	patternMarketStatesMu.Lock() // 修复: 添加缺失的锁
+	now := time.Now()
+
+	// ===== 修复死锁: 先收集任务，释放锁后再执行 =====
+	type resolutionTask struct {
+		State      *PatternMarketState
+		Position   *PatternPosition
+		ConfigID   string
+		MarketSlug string
+	}
+
+	var tasks []resolutionTask
+
+	for slug, state := range patternMarketStates {
+		if len(state.Positions) == 0 {
+			continue
+		}
+
+		// 检查市场是否过期 (结束时间 + 1分钟缓冲)
+		if now.Before(state.EndTime.Add(1 * time.Minute)) {
+			continue
+		}
+
+		// 市场已过期，收集未决议的持仓
+		for configID, pos := range state.Positions {
+			if pos == nil || pos.Pending || pos.Resolved {
+				continue
+			}
+
+			// 标记为等待决议 (避免重复处理)
+			pos.Resolved = true
+
+			tasks = append(tasks, resolutionTask{
+				State:      state,
+				Position:   pos,
+				ConfigID:   configID,
+				MarketSlug: slug,
+			})
+		}
+	}
+	patternMarketStatesMu.Unlock()
+
+	// ===== 在锁外执行决议查询 =====
+	for _, task := range tasks {
+		go func(t resolutionTask) {
+			// 1. 获取市场信息
+			client := src.NewGammaClient(http.DefaultClient)
+			market, err := client.GetMarketBySlug(context.Background(), t.MarketSlug, nil)
+
+			// 2. 处理查询失败 -> 重试机制
+			if err != nil {
+				log.Printf("⚠️ [Pattern] 查询决议失败 %s: %v (将重试)", t.MarketSlug, err)
+				// 重置 Resolved 以便重试
+				patternMarketStatesMu.Lock()
+				t.Position.Resolved = false
+				patternMarketStatesMu.Unlock()
+				return
+			}
+
+			// 3. 检查市场是否决议
+			if !market.Closed {
+				// 市场未关闭，稍后再查
+				patternMarketStatesMu.Lock()
+				t.Position.Resolved = false
+				patternMarketStatesMu.Unlock()
+				return
+			}
+
+			// 4. 解析决议结果
+			prices := market.OutcomePrices
+			resolution := ""
+			for i, pStr := range prices {
+				price, _ := parsePrice(pStr)
+				if price > 0.99 {
+					if i == 0 {
+						resolution = "UP"
+					} else {
+						resolution = "DOWN"
+					}
+					break
+				}
+			}
+
+			if resolution == "" {
+				log.Printf("⚠️ [Pattern][%s] 决议未确定 (Prices: %v)", t.MarketSlug, prices)
+				// 重置以便重试 (可能只是数据暂未更新)
+				patternMarketStatesMu.Lock()
+				t.Position.Resolved = false
+				patternMarketStatesMu.Unlock()
+				return
+			}
+
+			// 5. 计算 PnL
+			var pnl float64
+			if resolution == t.Position.Side {
+				// 获胜: amount - cost (纯利)
+				pnl = t.Position.Amount - t.Position.Cost
+			} else {
+				// 失败: 损失全部 cost
+				pnl = -t.Position.Cost
+			}
+
+			log.Printf("✅ [Pattern][%s][%s] 决议: %s, 持仓: %s, PnL: $%.2f",
+				t.ConfigID, t.MarketSlug, resolution, t.Position.Side, pnl)
+
+			// 6. 更新数据库
+			if t.Position.RecordID > 0 {
+				if err := database.UpdateTradeResolution(t.Position.RecordID, resolution, pnl); err != nil {
+					log.Printf("❌ [Pattern] 更新决议失败: %v", err)
+				}
+			}
+
+			// 7. 记录交易历史日志 (决议赎回)
+			UpdateResolutionForRedemption(t.MarketSlug, t.ConfigID, resolution, pnl)
+
+			// 8. 清除持仓
+			patternMarketStatesMu.Lock()
+			delete(t.State.Positions, t.ConfigID)
+			patternMarketStatesMu.Unlock()
+		}(task)
+	}
+}
+
+// RestorePatternPositions 从数据库恢复未决议的 Pattern 持仓
+func RestorePatternPositions() {
+	unresolvedTrades, err := database.GetUnresolvedPatternTrades()
+	if err != nil {
+		log.Printf("⚠️ [Pattern] 恢复持仓失败: %v", err)
+		return
+	}
+
+	if len(unresolvedTrades) == 0 {
+		log.Println("ℹ️ [Pattern] 没有需要恢复的持仓")
+		return
+	}
+
+	log.Printf("📋 启动检查: 发现 %d 条未决议交易", len(unresolvedTrades))
+
+	patternMarketStatesMu.Lock()
+	defer patternMarketStatesMu.Unlock()
+
+	restoredCount := 0
+	skippedCount := 0
+	for _, trade := range unresolvedTrades {
+		configID := strings.TrimPrefix(trade.ConfigGroup, "Pattern-")
+
+		// 检查 TokenID 是否存在 (旧记录可能没有)
+		if trade.TokenID == "" {
+			log.Printf("⚠️ [启动恢复][%s] %s: TokenID 为空，无法恢复 (旧记录)",
+				trade.ConfigGroup, trade.MarketSlug)
+			skippedCount++
+			continue
+		}
+
+		state, exists := patternMarketStates[trade.MarketSlug]
+		if !exists {
+			// 从 slug 解析 EndTime (格式: btc-updown-15m-1770194700)
+			endTime := parseEndTimeFromSlug(trade.MarketSlug)
+
+			state = &PatternMarketState{
+				Slug:         trade.MarketSlug,
+				Symbol:       trade.Symbol, // 从数据库恢复 Symbol
+				EndTime:      endTime,      // 从 slug 解析 EndTime
+				Positions:    make(map[string]*PatternPosition),
+				LatestPrices: make(map[string]float64),
+			}
+			patternMarketStates[trade.MarketSlug] = state
+
+			if !endTime.IsZero() {
+				log.Printf("📅 [启动恢复] %s: EndTime=%v", trade.MarketSlug, endTime.Format("15:04:05"))
+			}
+		}
+
+		if state.Positions == nil {
+			state.Positions = make(map[string]*PatternPosition)
+		}
+
+		// 如果 state 的 Symbol 为空，从 trade 恢复
+		if state.Symbol == "" && trade.Symbol != "" {
+			state.Symbol = trade.Symbol
+		}
+
+		position := &PatternPosition{
+			ConfigID:   configID,
+			MarketSlug: trade.MarketSlug,
+			Symbol:     trade.Symbol, // 从数据库恢复
+			Side:       trade.Side,
+			TokenID:    trade.TokenID, // 从数据库恢复 (关键!)
+			BuyPrice:   trade.Price,
+			Amount:     trade.Amount,
+			Cost:       trade.Cost,
+			RecordID:   trade.ID,
+			Pending:    false,
+		}
+
+		state.Positions[configID] = position
+		restoredCount++
+
+		log.Printf("🔄 [启动恢复][%s] %s: 方向=%s | Token=%s... | 价格=%.4f | 数量=%.2f | 成本=$%.2f",
+			trade.ConfigGroup, trade.MarketSlug, trade.Side,
+			trade.TokenID[:min(8, len(trade.TokenID))],
+			trade.Price, trade.Amount, trade.Cost)
+	}
+
+	if skippedCount > 0 {
+		log.Printf("⚠️ [Pattern] 跳过 %d 个持仓 (缺少 TokenID)", skippedCount)
+	}
+	log.Printf("✅ [Pattern] 成功恢复 %d 个持仓", restoredCount)
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

@@ -54,7 +54,7 @@ func InitDB(dbPath string) error {
 
 // createTables 创建必要的数据库表
 func createTables() error {
-	// 模拟交易表 (简化版)
+	// 模拟交易表 (包含 token_id 和 symbol 用于 Pattern 策略恢复)
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS simulation_trades (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +69,8 @@ func createTables() error {
 			final_resolution TEXT,
 			trend_percent REAL,
 			fair_price REAL,
+			token_id TEXT,
+			symbol TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
@@ -81,8 +83,10 @@ func createTables() error {
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_slug ON simulation_trades(market_slug)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_trades_config ON simulation_trades(config_group)`)
 
-	// 迁移: 添加 fair_price 列 (如果不存在)
-	db.Exec(`ALTER TABLE simulation_trades ADD COLUMN fair_price REAL`)
+	// 迁移: 添加缺失的列 (使用 helper 函数检查列是否存在)
+	addColumnIfNotExists("simulation_trades", "fair_price", "REAL")
+	addColumnIfNotExists("simulation_trades", "token_id", "TEXT")
+	addColumnIfNotExists("simulation_trades", "symbol", "TEXT")
 
 	// 迁移: 删除旧列 (SQLite 不支持 DROP COLUMN，使用重建表的方式)
 	cleanupOldColumns()
@@ -90,7 +94,43 @@ func createTables() error {
 	return nil
 }
 
-// cleanupOldColumns 清理旧列 (strategy_type, symbol, binance_price)
+// addColumnIfNotExists 检查列是否存在，不存在则添加
+func addColumnIfNotExists(table, column, colType string) {
+	// 检查列是否存在
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		log.Printf("⚠️ 无法查询表结构 %s: %v", table, err)
+		return
+	}
+	defer rows.Close()
+
+	columnExists := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			continue
+		}
+		if name == column {
+			columnExists = true
+			break
+		}
+	}
+
+	if !columnExists {
+		_, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, colType))
+		if err != nil {
+			log.Printf("⚠️ 添加列 %s.%s 失败: %v", table, column, err)
+		} else {
+			log.Printf("✅ 成功添加列 %s.%s", table, column)
+		}
+	}
+}
+
+// cleanupOldColumns 清理旧列 (strategy_type, binance_price)
+// 注意: symbol 现在是有效列，不再视为旧列
 func cleanupOldColumns() {
 	// 检查是否存在旧列
 	rows, err := db.Query(`PRAGMA table_info(simulation_trades)`)
@@ -107,7 +147,8 @@ func cleanupOldColumns() {
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
 			continue
 		}
-		if name == "strategy_type" || name == "symbol" || name == "binance_price" {
+		// 移除了 "symbol" - 它现在是 Pattern 策略需要的有效列
+		if name == "strategy_type" || name == "binance_price" {
 			hasOldColumns = true
 			break
 		}
@@ -127,7 +168,7 @@ func cleanupOldColumns() {
 		return
 	}
 
-	// 1. 创建新表
+	// 1. 创建新表 (包含 token_id 和 symbol)
 	_, err = tx.Exec(`
 		CREATE TABLE simulation_trades_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +183,8 @@ func cleanupOldColumns() {
 			final_resolution TEXT,
 			trend_percent REAL,
 			fair_price REAL,
+			token_id TEXT,
+			symbol TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
@@ -152,11 +195,12 @@ func cleanupOldColumns() {
 		return
 	}
 
-	// 2. 复制数据
+	// 2. 复制数据 (尝试保留 token_id 和 symbol，如果旧表有的话)
+	// 使用 COALESCE 处理可能不存在的列（旧表可能没有这些列）
 	_, err = tx.Exec(`
 		INSERT INTO simulation_trades_new 
 		(id, config_group, market_slug, stage, side, price, amount, cost, pnl, final_resolution, trend_percent, fair_price, created_at, updated_at)
-		SELECT id, config_group, market_slug, stage, side, price, amount, cost, pnl, final_resolution, trend_percent, NULL, created_at, updated_at
+		SELECT id, config_group, market_slug, stage, side, price, amount, cost, pnl, final_resolution, trend_percent, fair_price, created_at, updated_at
 		FROM simulation_trades
 	`)
 	if err != nil {
@@ -224,6 +268,8 @@ type SimulationTrade struct {
 	FinalResolution string
 	TrendPercent    float64
 	FairPrice       float64
+	TokenID         string // Pattern 策略需要: 用于恢复后卖出
+	Symbol          string // Pattern 策略需要: 币种 (BTC, ETH 等)
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -235,8 +281,8 @@ func InsertTrade(trade *SimulationTrade) (int64, error) {
 
 	result, err := db.Exec(`
 		INSERT INTO simulation_trades 
-		(config_group, market_slug, stage, side, price, amount, cost, pnl, trend_percent, fair_price)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(config_group, market_slug, stage, side, price, amount, cost, pnl, trend_percent, fair_price, token_id, symbol)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		trade.ConfigGroup,
 		trade.MarketSlug,
@@ -248,6 +294,8 @@ func InsertTrade(trade *SimulationTrade) (int64, error) {
 		trade.PnL,
 		trade.TrendPercent,
 		trade.FairPrice,
+		trade.TokenID,
+		trade.Symbol,
 	)
 	if err != nil {
 		return 0, err
@@ -409,4 +457,39 @@ func GetEarliestTradeTime() (time.Time, error) {
 	}
 
 	return t, nil
+}
+
+// GetUnresolvedPatternTrades 获取所有未决议的 Pattern 策略交易
+func GetUnresolvedPatternTrades() ([]SimulationTrade, error) {
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+
+	// 查询条件: config_group 以 "Pattern-" 开头，且 final_resolution 为空
+	query := `
+		SELECT id, config_group, market_slug, side, price, amount, cost, 
+		       COALESCE(token_id, '') as token_id, COALESCE(symbol, '') as symbol
+		FROM simulation_trades
+		WHERE config_group LIKE 'Pattern-%' 
+		  AND (final_resolution IS NULL OR final_resolution = '')
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var trades []SimulationTrade
+	for rows.Next() {
+		var t SimulationTrade
+		err := rows.Scan(&t.ID, &t.ConfigGroup, &t.MarketSlug, &t.Side, &t.Price, &t.Amount, &t.Cost, &t.TokenID, &t.Symbol)
+		if err != nil {
+			log.Printf("⚠️ 解析交易记录失败: %v", err)
+			continue
+		}
+
+		trades = append(trades, t)
+	}
+
+	return trades, nil
 }

@@ -35,7 +35,8 @@ type KlineData struct {
 // BinanceKlineClient 管理 Binance WebSocket 连接
 type BinanceKlineClient struct {
 	conn       *websocket.Conn
-	Klines     map[string]*KlineData // Key: Symbol (BTCUSDT, ETHUSDT, etc.)
+	Klines     map[string]*KlineData          // Key: Symbol (BTCUSDT, ETHUSDT, etc.) - 15分钟 K线
+	Klines1m   map[string][]HistoricalKline1m // Key: Symbol - 1分钟历史K线 (最多300根)
 	mu         sync.RWMutex
 	done       chan struct{}
 	symbols    []string
@@ -51,6 +52,16 @@ type BinanceKlineClient struct {
 
 	// 关闭状态 (防止重复关闭 panic)
 	closeOnce sync.Once
+}
+
+// HistoricalKline1m 1分钟历史K线数据
+type HistoricalKline1m struct {
+	OpenTime int64 // K线开始时间 (ms)
+	Open     float64
+	High     float64
+	Low      float64
+	Close    float64
+	Volume   float64
 }
 
 // binanceStreamMsg 币安流式消息外层
@@ -181,6 +192,7 @@ func NewBinanceKlineClient(symbols []string, logger Logger) *BinanceKlineClient 
 	}
 	return &BinanceKlineClient{
 		Klines:          make(map[string]*KlineData),
+		Klines1m:        make(map[string][]HistoricalKline1m),
 		symbols:         symbols,
 		done:            make(chan struct{}),
 		logger:          logger,
@@ -191,13 +203,19 @@ func NewBinanceKlineClient(symbols []string, logger Logger) *BinanceKlineClient 
 // Connect 连接到 Binance WebSocket 并开始监听
 func (c *BinanceKlineClient) Connect() error {
 	// 构建订阅流 URL
-	// 格式: btcusdt@kline_15m/ethusdt@kline_15m/...
+	// 格式: btcusdt@kline_15m/ethusdt@kline_15m/btcusdt@kline_1m/ethusdt@kline_1m/...
 	streams := ""
 	for i, symbol := range c.symbols {
 		if i > 0 {
 			streams += "/"
 		}
+		// 订阅 15分钟 K线 (用于主策略)
 		streams += fmt.Sprintf("%s@kline_15m", toLower(symbol))
+	}
+	// 同时订阅 1分钟 K线 (用于 Pattern 策略技术指标计算)
+	for _, symbol := range c.symbols {
+		streams += "/"
+		streams += fmt.Sprintf("%s@kline_1m", toLower(symbol))
 	}
 
 	url := binanceWSBaseURL + streams
@@ -220,6 +238,9 @@ func (c *BinanceKlineClient) Connect() error {
 	}
 	c.mu.Unlock()
 
+	// ===== 预加载 1 分钟历史 K 线 (用于 Pattern 策略立即可用) =====
+	c.preloadHistoricalKlines()
+
 	// 初始化最后消息时间
 	c.lastMessageMu.Lock()
 	c.lastMessageTime = time.Now()
@@ -232,6 +253,40 @@ func (c *BinanceKlineClient) Connect() error {
 	go c.healthCheck()
 
 	return nil
+}
+
+// preloadHistoricalKlines 使用 REST API 预加载 1 分钟历史 K 线
+func (c *BinanceKlineClient) preloadHistoricalKlines() {
+	restClient := NewBinanceRESTClient(c.logger)
+
+	for _, symbol := range c.symbols {
+		klines, err := restClient.FetchKlines(symbol, "1m", 240)
+		if err != nil {
+			c.logger.Warn("⚠️ [Binance] 预加载 %s 1m K 线失败: %v", symbol, err)
+			continue
+		}
+
+		// 转换并存储
+		c.mu.Lock()
+		if c.Klines1m == nil {
+			c.Klines1m = make(map[string][]HistoricalKline1m)
+		}
+		history := make([]HistoricalKline1m, len(klines))
+		for i, k := range klines {
+			history[i] = HistoricalKline1m{
+				OpenTime: k.OpenTime,
+				Open:     k.Open,
+				High:     k.High,
+				Low:      k.Low,
+				Close:    k.Close,
+				Volume:   k.Volume,
+			}
+		}
+		c.Klines1m[symbol] = history
+		c.mu.Unlock()
+
+		c.logger.Info("✅ [Binance] 预加载 %s 1m K 线: %d 根", symbol, len(klines))
+	}
 }
 
 // readLoop 持续读取 WebSocket 消息
@@ -306,7 +361,63 @@ func (c *BinanceKlineClient) processMessage(msg []byte) {
 		return
 	}
 
-	c.updateKline(event.S, event.K)
+	// 根据 stream 名称区分 15m 和 1m K线
+	// stream 格式: "btcusdt@kline_15m" 或 "btcusdt@kline_1m"
+	if len(streamMsg.Stream) > 6 && streamMsg.Stream[len(streamMsg.Stream)-2:] == "1m" {
+		// 1分钟 K线 - 存储历史
+		c.update1mKline(event.S, event.K)
+	} else {
+		// 15分钟 K线 - 更新当前状态
+		c.updateKline(event.S, event.K)
+	}
+}
+
+// update1mKline 更新 1分钟 K线历史数据
+func (c *BinanceKlineClient) update1mKline(symbol string, k binanceKline) {
+	// 使用实时更新，不再等待 K线完结 (k.X)
+	// 这样可以确保指标计算使用最新价格
+
+	kline := HistoricalKline1m{
+		OpenTime: k.T,
+		Open:     toFloat64(k.O),
+		High:     toFloat64(k.H),
+		Low:      toFloat64(k.L),
+		Close:    toFloat64(k.C),
+		Volume:   toFloat64(k.V),
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 初始化 slice
+	if c.Klines1m == nil {
+		c.Klines1m = make(map[string][]HistoricalKline1m)
+	}
+
+	klines := c.Klines1m[symbol]
+
+	// 检查是否已存在相同 OpenTime 的 K线
+	if len(klines) > 0 {
+		lastIdx := len(klines) - 1
+		if klines[lastIdx].OpenTime == k.T {
+			// 如果时间戳相同，则原地更新 (从 incomplete 到 complete 的过程)
+			c.Klines1m[symbol][lastIdx] = kline
+			return
+		}
+		// 如果新 K 线的时间戳比最后一个还要旧 (乱序)，忽略
+		if k.T < klines[lastIdx].OpenTime {
+			return
+		}
+	}
+
+	// 添加新 K线 (追加)
+	c.Klines1m[symbol] = append(klines, kline)
+
+	// 限制最多 300 根
+	const maxKlines = 300
+	if len(c.Klines1m[symbol]) > maxKlines {
+		c.Klines1m[symbol] = c.Klines1m[symbol][len(c.Klines1m[symbol])-maxKlines:]
+	}
 }
 
 // healthCheck 定期检查连接健康状态，如果长时间没有收到消息则触发重连
@@ -492,4 +603,42 @@ func (c *BinanceKlineClient) GetLatestKline(symbol string) *SimpleKline {
 		High:  data.HighPrice,
 		Low:   data.LowPrice,
 	}
+}
+
+// GetHistoricalKlines 获取 1 分钟历史 K 线数据 (用于 Pattern 策略技术指标计算)
+// 返回按时间顺序排列的 K 线切片 (从旧到新)
+func (c *BinanceKlineClient) GetHistoricalKlines(symbol string, limit int) []HistoricalKline {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.Klines1m == nil {
+		return nil
+	}
+
+	klines1m, ok := c.Klines1m[symbol]
+	if !ok || len(klines1m) == 0 {
+		return nil
+	}
+
+	// 转换为 HistoricalKline 格式
+	start := 0
+	if len(klines1m) > limit {
+		start = len(klines1m) - limit
+	}
+
+	result := make([]HistoricalKline, 0, limit)
+	for i := start; i < len(klines1m); i++ {
+		k := klines1m[i]
+		result = append(result, HistoricalKline{
+			Open:      k.Open,
+			High:      k.High,
+			Low:       k.Low,
+			Close:     k.Close,
+			Volume:    k.Volume,
+			OpenTime:  k.OpenTime,
+			CloseTime: k.OpenTime + 60000, // 1 分钟
+		})
+	}
+
+	return result
 }

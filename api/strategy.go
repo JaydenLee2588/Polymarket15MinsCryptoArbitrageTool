@@ -24,6 +24,7 @@ type MarketState struct {
 	Symbol        string
 	StartTime     time.Time
 	EndTime       time.Time
+	StrikePrice   float64           // 基准价 (from Polymarket API)
 	TokenIDToSide map[string]string // TokenID -> "UP" / "DOWN"
 	SideToTokenID map[string]string // "UP" / "DOWN" -> TokenID
 	LatestPrices  map[string]float64
@@ -74,6 +75,9 @@ var (
 	// 赎回服务
 	redeemer   *src.Redeemer
 	redeemerMu sync.Mutex
+
+	// 策略开关
+	enableMainStrategy bool = true // 默认启用
 )
 
 // StartSimulation 启动多配置模拟 (幂等)
@@ -84,6 +88,16 @@ func StartSimulation(configs []StrategyConfig) bool {
 	if isSimRunning {
 		log.Println("⚠️ 策略模拟已在运行。")
 		return false
+	}
+
+	// 读取策略开关配置 (默认启用)
+	enableMainStrategyStr := os.Getenv("ENABLE_MAIN_STRATEGY")
+	if enableMainStrategyStr == "false" {
+		enableMainStrategy = false
+		log.Println("⏸️ Main 策略已禁用 (ENABLE_MAIN_STRATEGY=false)，仅维护市场状态供 Pattern 策略使用")
+	} else {
+		enableMainStrategy = true
+		log.Println("▶️ Main 策略已启用")
 	}
 
 	if len(configs) == 0 {
@@ -219,7 +233,12 @@ func StartSimulation(configs []StrategyConfig) bool {
 	simDoneChan = make(chan struct{})
 	isSimRunning = true
 	go runSimulationLoop(configs)
-	log.Printf("🚀 策略模拟已启动 - %d 个配置组", len(configs))
+
+	if enableMainStrategy {
+		log.Printf("🚀 策略模拟已启动 - %d 个配置组 (Main 策略: 启用)", len(configs))
+	} else {
+		log.Printf("📡 市场监控已启动 - %d 个配置组 (Main 策略: 禁用/被动模式)", len(configs))
+	}
 
 	for _, cfg := range configs {
 		modeTag := "模拟"
@@ -232,8 +251,39 @@ func StartSimulation(configs []StrategyConfig) bool {
 			orderTypeStr = "GTC" // 默认
 		}
 
-		log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s, 转换系数=%.2f, 价格优势=%.2f, 最大滑点=%.2f",
-			cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeStr, cfg.FairPriceTrendFactor, cfg.MinPriceEdge, cfg.MaxSlippage)
+		if enableMainStrategy {
+			log.Printf("📝 配置组[%s]: MinTrendUp=%.4f, MinTrendDown=%.4f, Mode=%s, OrderType=%s, 转换系数=%.2f, 价格优势=%.2f, 最大滑点=%.2f",
+				cfg.ID, cfg.MinTrendPercentUp, cfg.MinTrendPercentDown, modeTag, orderTypeStr, cfg.FairPriceTrendFactor, cfg.MinPriceEdge, cfg.MaxSlippage)
+		} else {
+			log.Printf("👁️ [监控配置][%s]: 用于获取市场数据 (TrendWindow: %d-%ds)", cfg.ID, cfg.TrendWindowSecStart, cfg.TrendWindowSecEnd)
+		}
+	}
+
+	// ========== 启动 Pattern 策略 (如果启用) ==========
+	enablePatternStrategy := os.Getenv("ENABLE_PATTERN_STRATEGY")
+	if enablePatternStrategy == "true" {
+		patternConfigFile := os.Getenv("PATTERN_CONFIG_FILE")
+		if patternConfigFile == "" {
+			patternConfigFile = "strategy_config_3.yaml"
+		}
+
+		if _, err := os.Stat(patternConfigFile); err == nil {
+			// 在后台加载并启动，避免阻塞主流程
+			go func() {
+				patternConfigs, err := LoadPatternConfigs(patternConfigFile)
+				if err != nil {
+					log.Printf("⚠️ [API启动] 加载 Pattern 配置失败: %v", err)
+				} else if len(patternConfigs) > 0 {
+					log.Printf("📋 [API启动] 正在启动 Pattern 策略 (%d 个配置组)", len(patternConfigs))
+					// Pattern 策略启动函数内部已处理并发锁，可安全调用
+					StartPatternStrategy(patternConfigs)
+				}
+			}()
+		} else {
+			log.Printf("ℹ️ [API启动] Pattern 配置文件不存在: %s，跳过", patternConfigFile)
+		}
+	} else {
+		log.Println("ℹ️ [API启动] Pattern 策略未启用 (ENABLE_PATTERN_STRATEGY!=true)")
 	}
 
 	return true
@@ -249,6 +299,16 @@ func StopSimulation() bool {
 		return false
 	}
 
+	// 读取策略开关配置 (默认启用)
+	enableMainStrategyStr := os.Getenv("ENABLE_MAIN_STRATEGY")
+	if enableMainStrategyStr == "false" {
+		enableMainStrategy = false
+		log.Println("⏸️ Main 策略已禁用 (ENABLE_MAIN_STRATEGY=false)，仅维护市场状态供 Pattern 策略使用")
+	} else {
+		enableMainStrategy = true
+		log.Println("▶️ Main 策略已启用")
+	}
+
 	// 立即标记为已停止，防止重复调用 close 导致 panic
 	isSimRunning = false
 	close(simStopChan)
@@ -262,11 +322,18 @@ func StopSimulation() bool {
 	select {
 	case <-doneChan:
 		log.Println("✅ 模拟循环已确认退出")
-		return true
 	case <-time.After(10 * time.Second):
 		log.Println("⚠️ 等待模拟循环退出超时 (10秒)")
-		return true
 	}
+
+	// ========== 同时停止 Pattern 策略 ==========
+	if IsPatternStrategyRunning() {
+		log.Println("🛑 正在停止 Pattern 策略...")
+		StopPatternStrategy()
+		log.Println("✅ Pattern 策略已停止")
+	}
+
+	return true
 }
 
 // runSimulationLoop 模拟循环
@@ -304,14 +371,25 @@ func runSimulationLoop(configs []StrategyConfig) {
 
 	log.Printf("✅ MarketManager 已初始化 (订单簿快照 + price_change 模式)")
 
-	// 2. 初始化 Binance WebSocket
-	binanceSymbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
-	binanceClient = src.NewBinanceKlineClient(binanceSymbols, src.NewLogger(src.LogLevelInfo))
-	if err := binanceClient.Connect(); err != nil {
-		log.Printf("⚠️ Binance WS 连接失败 (无法使用趋势检测): %v", err)
+	// 2. 初始化 Binance WebSocket (如果尚未由 Pattern 策略初始化)
+	simMu.Lock()
+	needInit := binanceClient == nil
+	simMu.Unlock()
+
+	if needInit {
+		binanceSymbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
+		newClient := src.NewBinanceKlineClient(binanceSymbols, src.NewLogger(src.LogLevelInfo))
+		if err := newClient.Connect(); err != nil {
+			log.Printf("⚠️ Binance WS 连接失败 (无法使用趋势检测): %v", err)
+		} else {
+			simMu.Lock()
+			binanceClient = newClient
+			simMu.Unlock()
+			defer binanceClient.Close()
+			log.Println("✅ 已连接到 Binance WS (监听 15m + 1m K线)")
+		}
 	} else {
-		defer binanceClient.Close()
-		log.Println("✅ 已连接到 Binance WS (监听 15m K线)")
+		log.Println("ℹ️ 复用已有的 Binance WebSocket 客户端")
 	}
 
 	// 4. 共享市场发现
@@ -551,6 +629,9 @@ func runSimulationLoop(configs []StrategyConfig) {
 			log.Printf("💓 [心跳] 活跃市场: %d, 等待决议: %d, Binance: %s, 最后更新: %s, 回调数: %d",
 				totalActive, totalPending, binanceStatus, lastUpdateAgo, totalCallbacks)
 
+			// ===== 附加技术指标信息 (类似 TUI) =====
+			printHeartbeatIndicators()
+
 			// MarketManager 内置健康检查和自动重连，无需外部 watchdog
 		}
 	}
@@ -639,7 +720,11 @@ func handlePriceChange(pc realtime.PriceChange) {
 					}
 					state.LatestPrices[side] = priceToUse
 					_ = source // 调试时可取消注释: log.Printf("价格来源: %s = %.4f", source, priceToUse)
-					checkBinanceArbitrage(state, configs[i])
+
+					// 触发 Binance 这里的逻辑检查 (仅当 Main 策略启用时)
+					if enableMainStrategy {
+						checkBinanceArbitrage(state, configs[i])
+					}
 				}
 			}
 		}
@@ -745,6 +830,7 @@ func scanAndSubscribeWithManager(
 				Symbol:        market.Symbol,
 				StartTime:     market.StartTime,
 				EndTime:       market.EndTime,
+				StrikePrice:   market.StrikePrice,
 				TokenIDToSide: make(map[string]string),
 				SideToTokenID: make(map[string]string),
 				LatestPrices:  make(map[string]float64),
@@ -988,8 +1074,35 @@ type MarketInfo struct {
 	Symbol        string
 	StartTime     time.Time
 	EndTime       time.Time
+	StrikePrice   float64 // 基准价 (from Polymarket API GroupItemThreshold)
 	TokenIDToSide map[string]string
 	SideToTokenID map[string]string // 反向映射，用于真实下单
+}
+
+// parseStrikePriceFromMarket 从市场数据解析 Strike Price
+// 尝试多个字段来源：GroupItemThreshold, XAxisValue, GroupItemTitle
+func parseStrikePriceFromMarket(m *src.Market) float64 {
+	var strikePrice float64
+
+	// 尝试 1: GroupItemThreshold
+	if m.GroupItemThreshold != "" {
+		fmt.Sscanf(m.GroupItemThreshold, "%f", &strikePrice)
+	}
+
+	// 尝试 2: XAxisValue (用于某些市场类型)
+	if strikePrice == 0 && m.XAxisValue != "" {
+		fmt.Sscanf(m.XAxisValue, "%f", &strikePrice)
+	}
+
+	// 尝试 3: GroupItemTitle (可能包含如 "$76000" 格式)
+	if strikePrice == 0 && m.GroupItemTitle != "" {
+		var price float64
+		if _, err := fmt.Sscanf(strings.ReplaceAll(m.GroupItemTitle, "$", ""), "%f", &price); err == nil && price > 10000 {
+			strikePrice = price
+		}
+	}
+
+	return strikePrice
 }
 
 // scanNewMarkets 扫描新市场 (采用两步获取模式)
@@ -1143,11 +1256,15 @@ func scanNewMarkets(
 				sideToTokenID[side] = tid
 			}
 
+			// 使用辅助函数解析 Strike Price
+			strikePrice := parseStrikePriceFromMarket(m)
+
 			market := MarketInfo{
 				Slug:          m.Slug,
 				Symbol:        symbol,
 				StartTime:     windowStart,
 				EndTime:       windowEnd,
+				StrikePrice:   strikePrice,
 				TokenIDToSide: tokenIDToSide,
 				SideToTokenID: sideToTokenID,
 			}
@@ -1226,11 +1343,15 @@ func scanNewMarkets(
 								sideToTokenID[side] = tid
 							}
 
+							// 使用辅助函数解析 Strike Price
+							strikePrice := parseStrikePriceFromMarket(m)
+
 							market := MarketInfo{
 								Slug:          m.Slug,
 								Symbol:        symbol,
 								StartTime:     currentWindow,
 								EndTime:       currentWindow.Add(15 * time.Minute),
+								StrikePrice:   strikePrice,
 								TokenIDToSide: tokenIDToSide,
 								SideToTokenID: sideToTokenID,
 							}
@@ -1835,3 +1956,249 @@ func anyToFloat(v interface{}) float64 {
 
 // NOTE: CalculateSigmoidFairPrice and GetVolatilityFactor have been moved to strategy_engine.go
 // to enable sharing between live trading and backtesting.
+
+// ==================== TUI 集成导出函数 ====================
+
+// GetActiveMarketStates 返回所有活跃市场状态 (供 TUI 使用)
+// 返回 map[configID]map[slug]*MarketState
+func GetActiveMarketStates() map[string]map[string]*MarketState {
+	simMu.Lock()
+	defer simMu.Unlock()
+
+	if rtConfigStatesRef == nil {
+		return nil
+	}
+	return *rtConfigStatesRef
+}
+
+// GetMarketManager 返回 MarketManager 实例 (供 TUI 获取订单簿)
+func GetMarketManager() *realtime.MarketManager {
+	marketManagerMu.Lock()
+	defer marketManagerMu.Unlock()
+	return marketManager
+}
+
+// GetBinanceClient 返回 Binance K线客户端 (供 TUI 获取技术指标)
+func GetBinanceClient() *src.BinanceKlineClient {
+	return binanceClient
+}
+
+// IsStrategyRunning 检查策略是否正在运行
+func IsStrategyRunning() bool {
+	simMu.Lock()
+	defer simMu.Unlock()
+	return isSimRunning
+}
+
+// TUIMarketInfo TUI 需要的市场信息
+type TUIMarketInfo struct {
+	UpPrice     float64
+	DownPrice   float64
+	Slug        string
+	Symbol      string
+	EndTime     time.Time
+	StrikePrice float64 // 基准价 (from Polymarket API)
+	HasData     bool
+}
+
+// GetMarketInfo 返回当前活跃 BTC 市场的完整信息 (供 TUI 使用)
+// 只返回 BTC 市场，忽略其他市场 (XRP, ETH, SOL 等)
+func GetMarketInfo() TUIMarketInfo {
+	simMu.Lock()
+	defer simMu.Unlock()
+
+	if rtConfigStatesRef == nil {
+		return TUIMarketInfo{}
+	}
+
+	// 遍历找到 BTC 市场
+	for _, configStates := range *rtConfigStatesRef {
+		for _, state := range configStates {
+			if state != nil && state.LatestPrices != nil {
+				// 只返回 BTC 市场 (Symbol = "BTCUSDT" 或 slug 包含 "btc")
+				isBTC := state.Symbol == "BTCUSDT" ||
+					strings.Contains(strings.ToLower(state.Slug), "btc")
+				if !isBTC {
+					continue
+				}
+
+				up := state.LatestPrices["UP"]
+				down := state.LatestPrices["DOWN"]
+				if up > 0 || down > 0 {
+					return TUIMarketInfo{
+						UpPrice:     up,
+						DownPrice:   down,
+						Slug:        state.Slug,
+						Symbol:      state.Symbol,
+						EndTime:     state.EndTime,
+						StrikePrice: state.StrikePrice,
+						HasData:     true,
+					}
+				}
+			}
+		}
+	}
+	return TUIMarketInfo{}
+}
+
+// GetPolymarketPrices 返回当前活跃市场的 UP/DOWN 价格 (兼容旧接口)
+func GetPolymarketPrices() (float64, float64) {
+	info := GetMarketInfo()
+	return info.UpPrice, info.DownPrice
+}
+
+// printHeartbeatIndicators 打印技术指标心跳 (类似 TUI)
+func printHeartbeatIndicators() {
+	// ANSI 颜色代码
+	const (
+		colorReset  = "\033[0m"
+		colorRed    = "\033[31m"
+		colorGreen  = "\033[32m"
+		colorYellow = "\033[33m"
+		colorCyan   = "\033[36m"
+	)
+
+	simMu.Lock()
+	defer simMu.Unlock()
+	client := binanceClient
+
+	if client == nil {
+		return
+	}
+
+	// 获取各币种数据
+	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"}
+	shortNames := []string{"BTC", "ETH", "SOL", "XRP"}
+
+	var logs []string
+	for i, symbol := range symbols {
+		shortName := shortNames[i]
+		klines := client.GetHistoricalKlines(symbol, 60)
+		if len(klines) < 14 {
+			continue
+		}
+
+		closes := src.GetCloses(klines)
+
+		// 1. 计算基础指标
+		rsi := src.ComputeRSI(closes, 14)
+		macd := src.ComputeMACD(closes, 12, 26, 9)
+
+		// 2. 计算 Heiken Ashi
+		ha := src.ComputeHeikenAshi(klines)
+		haColor, haCount := src.CountConsecutive(ha)
+		haDesc := "连涨"
+		haColorCode := colorGreen
+		if haColor == "red" {
+			haDesc = "连跌"
+			haColorCode = colorRed
+		}
+		haStr := fmt.Sprintf("%s%s x%d%s", haColorCode, haDesc, haCount, colorReset)
+
+		// 3. 计算形态和建议
+		rsiSlope := src.SlopeLast(src.ComputeRSISeries(closes, 14), 3)
+		vwap := src.ComputeSessionVWAP(klines)
+		currentPrice := closes[len(closes)-1]
+		vwapDist := (currentPrice - vwap) / vwap
+
+		prevRSI := 50.0
+		if len(closes) > 15 {
+			prevRSI = src.ComputeRSI(closes[:len(closes)-1], 14)
+		}
+
+		patternRes := src.DetectPattern(src.PatternDetectInput{
+			VWAPDist: vwapDist,
+			MACD:     macd,
+			RSI:      rsi,
+			RSISlope: rsiSlope,
+			PrevRSI:  prevRSI,
+		})
+
+		// 4. 优化 MACD 描述
+		macdDesc := "震荡"
+		macdColor := colorYellow
+		if macd.Histogram > 0 {
+			if macd.HistDelta > 0 {
+				macdDesc = "↑强涨" // 柱子变长
+				macdColor = colorGreen
+			} else {
+				macdDesc = "↑弱涨" // 柱子变短
+				macdColor = colorGreen
+			}
+		} else {
+			if macd.HistDelta < 0 {
+				macdDesc = "↓强跌" // 柱子负向变长
+				macdColor = colorRed
+			} else {
+				macdDesc = "↓弱跌" // 柱子负向变短
+				macdColor = colorRed
+			}
+		}
+		macdStr := fmt.Sprintf("%s%s%s", macdColor, macdDesc, colorReset)
+
+		// 5. 建议动作
+		actionStr := ""
+		if patternRes.ActionSuggestion != "" {
+			actColor := colorReset
+			if strings.Contains(patternRes.ActionSuggestion, "买涨") {
+				actColor = colorGreen
+			} else if strings.Contains(patternRes.ActionSuggestion, "买跌") {
+				actColor = colorRed
+			}
+			actionStr = fmt.Sprintf(" 建议=%s%s%s", actColor, patternRes.ActionSuggestion, colorReset)
+		}
+
+		// 6. RSI 颜色
+		rsiColor := colorYellow
+		if rsi > 70 {
+			rsiColor = colorRed
+		} else if rsi < 30 {
+			rsiColor = colorGreen
+		}
+
+		// 7. Pattern 颜色
+		patternColor := colorYellow
+		if patternRes.IsBuyUp() {
+			patternColor = colorGreen
+		} else if patternRes.IsBuyDown() {
+			patternColor = colorRed
+		}
+
+		// 获取 Polymarket 价格 (需要在锁内安全访问)
+		upPrice, downPrice := 0.0, 0.0
+		if rtConfigStatesRef != nil {
+			states := *rtConfigStatesRef
+			var bestState *MarketState
+
+			// 寻找该币种的最佳市场 (EndTime 最晚的)
+			for _, configStates := range states {
+				for slug, state := range configStates {
+					if state != nil && strings.HasPrefix(strings.ToLower(slug), strings.ToLower(shortNames[i])) {
+						if bestState == nil || state.EndTime.After(bestState.EndTime) {
+							bestState = state
+						}
+					}
+				}
+			}
+
+			if bestState != nil {
+				upPrice = bestState.LatestPrices["UP"]
+				downPrice = bestState.LatestPrices["DOWN"]
+			}
+		}
+
+		// 构建输出
+		logLine := fmt.Sprintf("   %s[%s]%s RSI=%s%.1f%s MACD=%s HA=%s Pattern=%s%s%s%s PM=%.2f/%.2f",
+			colorCyan, shortName, colorReset,
+			rsiColor, rsi, colorReset,
+			macdStr, haStr,
+			patternColor, src.GetPatternChineseName(patternRes.PatternType), colorReset,
+			actionStr,
+			upPrice, downPrice)
+		logs = append(logs, logLine)
+	}
+
+	if len(logs) > 0 {
+		log.Printf("📊 指标概览:\n%s", strings.Join(logs, "\n"))
+	}
+}

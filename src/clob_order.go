@@ -254,13 +254,30 @@ func (c *ClobOrderClient) PlaceOrder(
 	// ✅ 确保订单金额 >= $1 (Polymarket API 最低要求)
 	minOrderValue := 1.0
 	orderValue := price * size
-	if orderValue < minOrderValue {
-		// 自动增加 share 数量以满足最低订单金额
-		adjustedSize := minOrderValue / price
-		// 向上取整到整数 share
-		adjustedSize = float64(int(adjustedSize) + 1)
-		fmt.Printf("📊 [订单调整] 原金额 $%.2f < $1, 自动调整: %.0f shares → %.0f shares\n", orderValue, size, adjustedSize)
-		size = adjustedSize
+
+	// ✅ 确保订单数量 >= 5 (Polymarket 新限制: 最小 size 5)
+	minOrderSize := 5.0
+
+	// 自动调整逻辑 (仅针对买单，卖单无法凭空增加数量)
+	if side == ClobOrderSideBuy {
+		// 1. 检查数量
+		if size < minOrderSize {
+			fmt.Printf("📊 [订单调整] 数量 %.2f < %.0f, 自动调整为 %.0f shares\n", size, minOrderSize, minOrderSize)
+			size = minOrderSize
+		}
+
+		// 2. 检查金额 (基于调整后的数量)
+		orderValue = price * size
+		if orderValue < minOrderValue {
+			// 需要更多 shares 才能达到 $1
+			requiredSize := minOrderValue / price
+			// 向上取整
+			requiredSize = float64(int(requiredSize) + 1)
+			if requiredSize > size {
+				fmt.Printf("📊 [订单调整] 金额 $%.2f < $1, 自动调整为 %.0f shares\n", orderValue, requiredSize)
+				size = requiredSize
+			}
+		}
 	}
 
 	// 计算 makerAmount 和 takerAmount
@@ -288,8 +305,21 @@ func (c *ClobOrderClient) PlaceOrder(
 		takerAmount = sharesAmount.BigInt()
 	} else {
 		// SELL: 卖出 size shares，获得 price * size USDC
-		sharesAmount := sizeDecimal.Mul(multiplier)
-		usdcAmount := priceDecimal.Mul(sizeDecimal).Mul(multiplier)
+		// API 限制 (SELL):
+		// - makerAmount (shares): 最多支持 2 位小数
+		// - takerAmount (USDC): 必须是精确的 price * size
+
+		// 1. 将价格四舍五入到 2 位小数 (cents) - Polymarket 价格精度
+		roundedPrice := priceDecimal.Round(2)
+
+		// 2. 将 shares 截断到整数 (Polymarket 通常是整数 shares)
+		truncatedShares := sizeDecimal.Floor()
+		sharesAmount := truncatedShares.Mul(multiplier)
+
+		// 3. 计算精确的 USDC 金额 (使用 rounded price * truncated shares)
+		// 结果自然是 2 位小数精度 (因为价格是 2 位，shares 是整数)
+		usdcAmount := roundedPrice.Mul(truncatedShares).Mul(multiplier)
+
 		makerAmount = sharesAmount.BigInt()
 		takerAmount = usdcAmount.BigInt()
 	}
@@ -384,9 +414,6 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 🔍 DEBUG: 打印完整的请求payload
-	fmt.Printf("📤 [DEBUG] Order Payload:\n%s\n", string(jsonData))
-
 	// 添加 L2 认证头 (使用 HMAC-SHA256 签名)
 	timestamp := time.Now().Unix()
 
@@ -423,9 +450,6 @@ func (c *ClobOrderClient) submitOrder(ctx context.Context, req *PostOrderRequest
 	}
 
 	body := resp.Body
-
-	// 🔍 DEBUG: 打印完整的响应
-	fmt.Printf("📥 [DEBUG] Response Status: %d\n📥 [DEBUG] Response Body: %s\n", resp.Status, body)
 
 	// 解析响应
 	if resp.Status != http.StatusOK && resp.Status != http.StatusCreated {

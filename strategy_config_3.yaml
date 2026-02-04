@@ -1,0 +1,113 @@
+# ==============================================================================
+# Pattern-Based Strategy Configuration
+# ==============================================================================
+#
+# 核心逻辑：
+# 1. 在指定时间窗口内 [trend_window_sec_start, trend_window_sec_end] 监控市场
+# 2. 当检测到 patterns 列表中的形态时触发买入
+# 3. 根据当前价格选择对应的数量档位
+# 4. 持仓后，当价格上涨达到 sell_threshold 时自动卖出
+#
+# 可用形态名称：
+#   - 火箭发射 (ROCKET_LAUNCH) - 顺势多，强烈推荐
+#   - 空中加油 (AERIAL_REFUEL) - 顺势多，推荐
+#   - 断头铡刀 (GUILLOTINE) - 顺势空，强烈推荐
+#   - 水下死叉 (UNDERWATER_DEAD) - 顺势空，推荐
+#   - 底背离 (BULLISH_DIV) - 反转多，谨慎
+#   - 极度超卖 (OVERSOLD) - 反转多，推荐
+#   - 顶背离 (BEARISH_DIV) - 反转空，谨慎
+#   - 情绪高潮 (CLIMAX_TOP) - 反转空，强烈推荐
+# ==============================================================================
+
+groups:
+  - id: "Pattern策略1"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 300
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.30
+    leg1_share_price_2: 0.45
+    leg1_share_price_3: 0.58
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
+    max_slippage: 0.03
+    patterns:
+      - "火箭发射"
+      - "空中加油"
+    sell_threshold: 0.15
+    enable_stop_loss: true
+    stop_loss_minutes_before_close: 3
+    symbols:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
+
+  - id: "Pattern策略2"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 300
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.30
+    leg1_share_price_2: 0.45
+    leg1_share_price_3: 0.58
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
+    max_slippage: 0.03
+    patterns:
+      - "断头铡刀"
+      - "水下死叉"
+    sell_threshold: 0.15
+    enable_stop_loss: true
+    stop_loss_minutes_before_close: 3
+    symbols:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
+
+  - id: "Pattern策略3"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 300
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.30
+    leg1_share_price_2: 0.45
+    leg1_share_price_3: 0.58
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
+    max_slippage: 0.03
+    patterns:
+      - "极度超卖"
+      - "情绪高潮"
+    sell_threshold: 0.15
+    enable_stop_loss: true
+    stop_loss_minutes_before_close: 3
+    symbols:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
+
+  - id: "Pattern策略4"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 300
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.30
+    leg1_share_price_2: 0.45
+    leg1_share_price_3: 0.58
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
+    max_slippage: 0.03
+    patterns:
+      - "顶背离"
+      - "底背离"
+    sell_threshold: 0.20
+    enable_stop_loss: false
+    stop_loss_minutes_before_close: 3
+    symbols:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
