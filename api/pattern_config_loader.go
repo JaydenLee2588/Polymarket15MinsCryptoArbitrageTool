@@ -59,6 +59,8 @@ var patternNameMap = map[string]src.PatternType{
 	"情绪高潮": src.PatternClimaxTop,
 	"织布机":  src.PatternChopping,
 	"假突破":  src.PatternTrap,
+	"单边上涨": src.PatternTrendSurgeUp,
+	"单边下跌": src.PatternTrendSurgeDown,
 }
 
 // ==================== YAML 结构 ====================

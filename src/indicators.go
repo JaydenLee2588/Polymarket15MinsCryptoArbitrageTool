@@ -278,3 +278,120 @@ func CountVWAPCrosses(closes, vwapSeries []float64, lookback int) int {
 	}
 	return crosses
 }
+
+// ==================== TrendSurge 辅助函数 ====================
+
+// ComputeATR 计算平均真实波幅 (Average True Range)
+// period: 周期 (通常为 14)
+func ComputeATR(klines []HistoricalKline, period int) float64 {
+	if len(klines) < period+1 {
+		return 0
+	}
+
+	trSum := 0.0
+	for i := len(klines) - period; i < len(klines); i++ {
+		k := klines[i]
+		prevClose := klines[i-1].Close
+		// 真实波幅 = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
+		tr := math.Max(k.High-k.Low, math.Max(math.Abs(k.High-prevClose), math.Abs(k.Low-prevClose)))
+		trSum += tr
+	}
+
+	return trSum / float64(period)
+}
+
+// ComputeStdDev 计算标准差
+func ComputeStdDev(values []float64) float64 {
+	n := len(values)
+	if n < 2 {
+		return 0
+	}
+
+	// 计算均值
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(n)
+
+	// 计算方差
+	variance := 0.0
+	for _, v := range values {
+		diff := v - mean
+		variance += diff * diff
+	}
+	variance /= float64(n)
+
+	return math.Sqrt(variance)
+}
+
+// LinearRegressionSlope 计算线性回归斜率
+// 返回归一化斜率 (斜率 / 均值)，便于跨币种比较
+func LinearRegressionSlope(values []float64) float64 {
+	n := len(values)
+	if n < 2 {
+		return 0
+	}
+
+	// 计算 x̄, ȳ
+	sumX, sumY := 0.0, 0.0
+	for i, v := range values {
+		sumX += float64(i)
+		sumY += v
+	}
+	meanX := sumX / float64(n)
+	meanY := sumY / float64(n)
+
+	// 如果均值为 0，无法归一化
+	if meanY == 0 {
+		return 0
+	}
+
+	// 计算斜率: Σ(xi - x̄)(yi - ȳ) / Σ(xi - x̄)²
+	numerator, denominator := 0.0, 0.0
+	for i, v := range values {
+		xDiff := float64(i) - meanX
+		yDiff := v - meanY
+		numerator += xDiff * yDiff
+		denominator += xDiff * xDiff
+	}
+
+	if denominator == 0 {
+		return 0
+	}
+
+	slope := numerator / denominator
+	// 归一化
+	return slope / meanY
+}
+
+// HasNoReverseShadow 检查 Heiken Ashi 蜡烛是否无反向影线
+// isUptrend: true = 检查下影线 (做多时), false = 检查上影线 (做空时)
+// tolerance: 容错率 (推荐 0.05 = 5%)
+func HasNoReverseShadow(ha HeikenAshiCandle, isUptrend bool, tolerance float64) bool {
+	body := ha.Body
+	if body == 0 {
+		return false // 无实体，无法判断
+	}
+
+	var shadowLen float64
+	if isUptrend {
+		// 上涨时检查下影线
+		shadowLen = math.Min(ha.Open, ha.Close) - ha.Low
+	} else {
+		// 下跌时检查上影线
+		shadowLen = ha.High - math.Max(ha.Open, ha.Close)
+	}
+
+	// 影线长度 <= 实体长度 * 容错率
+	return shadowLen <= body*tolerance
+}
+
+// GetVolumes 从 K 线数据中提取成交量序列
+func GetVolumes(klines []HistoricalKline) []float64 {
+	volumes := make([]float64, len(klines))
+	for i, k := range klines {
+		volumes[i] = k.Volume
+	}
+	return volumes
+}

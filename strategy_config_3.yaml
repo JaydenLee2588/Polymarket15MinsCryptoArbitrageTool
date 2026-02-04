@@ -22,11 +22,11 @@
 groups:
   - id: "Pattern策略1"
     trend_window_sec_start: 30
-    trend_window_sec_end: 300
+    trend_window_sec_end: 600
     leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.30
-    leg1_share_price_2: 0.45
-    leg1_share_price_3: 0.58
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.84
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -45,11 +45,11 @@ groups:
 
   - id: "Pattern策略2"
     trend_window_sec_start: 30
-    trend_window_sec_end: 300
+    trend_window_sec_end: 600
     leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.30
-    leg1_share_price_2: 0.45
-    leg1_share_price_3: 0.58
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.84
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -68,11 +68,11 @@ groups:
 
   - id: "Pattern策略3"
     trend_window_sec_start: 30
-    trend_window_sec_end: 300
-    leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.30
-    leg1_share_price_2: 0.45
-    leg1_share_price_3: 0.58
+    trend_window_sec_end: 560
+    leg0_share_price_0: 0.40
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.70
+    leg1_share_price_3: 0.84
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -91,11 +91,11 @@ groups:
 
   - id: "Pattern策略4"
     trend_window_sec_start: 30
-    trend_window_sec_end: 300
-    leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.30
-    leg1_share_price_2: 0.45
-    leg1_share_price_3: 0.58
+    trend_window_sec_end: 560
+    leg0_share_price_0: 0.40
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.70
+    leg1_share_price_3: 0.84
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -104,8 +104,31 @@ groups:
       - "顶背离"
       - "底背离"
     sell_threshold: 0.20
-    enable_stop_loss: false
+    enable_stop_loss: true
     stop_loss_minutes_before_close: 3
+    symbols:
+      - "BTC"
+      - "ETH"
+      - "SOL"
+      - "XRP"
+
+  - id: "Pattern策略5"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.10
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.70
+    leg1_share_price_3: 0.85
+    leg1_share_amount_1: 10
+    leg1_share_amount_2: 8
+    leg1_share_amount_3: 5
+    max_slippage: 0.05
+    patterns:
+      - "单边上涨"
+      - "单边下跌"
+    sell_threshold: 0.25
+    enable_stop_loss: false
+    stop_loss_minutes_before_close: 1
     symbols:
       - "BTC"
       - "ETH"

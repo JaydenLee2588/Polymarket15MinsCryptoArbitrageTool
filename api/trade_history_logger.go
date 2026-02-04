@@ -119,7 +119,7 @@ func getEntryKey(marketSlug, configID string) string {
 	return marketSlug + "-" + configID
 }
 
-// LogBuyEntry 记录买入事件
+// LogBuyEntry 记录买入事件 (立即写入)
 func LogBuyEntry(entry *TradeLogEntry) {
 	tradeLogMu.Lock()
 	defer tradeLogMu.Unlock()
@@ -144,7 +144,11 @@ func LogBuyEntry(entry *TradeLogEntry) {
 	key := getEntryKey(entry.MarketSlug, entry.ConfigID)
 	tradeLogEntries[key] = entry
 
-	log.Printf("📝 [TradeHistory] 记录买入: %s | %s | %s | %.4f", entry.ConfigID, entry.MarketSlug, entry.Side, entry.BuyPrice)
+	// 立即写入买入日志
+	line := formatBuyLine(entry)
+	writeLogLine(line)
+
+	log.Printf("📝 [TradeHistory] 记录买入(已写入): %s | %s | %s | %.4f", entry.ConfigID, entry.MarketSlug, entry.Side, entry.BuyPrice)
 }
 
 // LogBuyFailure 记录买入失败
@@ -171,14 +175,14 @@ func LogBuyFailure(entry *TradeLogEntry, failMsg string) {
 	entry.BuyFailed = true
 	entry.FailMsg = failMsg
 
-	// 写入日志 (买入失败立即写入)
+	// 写入日志
 	line := formatBuyFailureLine(entry)
 	writeLogLine(line)
 
 	log.Printf("📝 [TradeHistory] 记录买入失败: %s | %s | %s", entry.ConfigID, entry.MarketSlug, failMsg)
 }
 
-// UpdateSellEntry 更新卖出信息
+// UpdateSellEntry 更新卖出信息 (独立写入)
 func UpdateSellEntry(marketSlug, configID string, sellReason string, sellPrice, sellAmount, revenue, pnl float64) {
 	tradeLogMu.Lock()
 	defer tradeLogMu.Unlock()
@@ -204,18 +208,17 @@ func UpdateSellEntry(marketSlug, configID string, sellReason string, sellPrice, 
 	entry.Revenue = revenue
 	entry.PnL = pnl
 
-	log.Printf("📝 [TradeHistory] 更新卖出: %s | %s | %s | PnL=$%.2f", configID, marketSlug, sellReason, pnl)
+	// 立即写入卖出日志
+	line := formatSellLine(entry)
+	writeLogLine(line)
 
-	// 如果已有决议，写入完整日志
-	if entry.Resolution != "" && !entry.Written {
-		line := formatCompleteLine(entry)
-		writeLogLine(line)
-		entry.Written = true
-		delete(tradeLogEntries, key) // 清除已完成条目
-	}
+	entry.Written = true
+	delete(tradeLogEntries, key) // 清除已完成条目 (Log Splitted, mission done)
+
+	log.Printf("📝 [TradeHistory] 记录卖出(已写入): %s | %s | %s | PnL=$%.2f", configID, marketSlug, sellReason, pnl)
 }
 
-// UpdateResolution 更新决议结果
+// UpdateResolution 更新决议结果 (独立写入)
 func UpdateResolution(marketSlug, configID string, resolution string) {
 	tradeLogMu.Lock()
 	defer tradeLogMu.Unlock()
@@ -232,16 +235,16 @@ func UpdateResolution(marketSlug, configID string, resolution string) {
 	}
 
 	entry.Resolution = resolution
+	entry.SellReason = "决议" // 标记原因
 
-	log.Printf("📝 [TradeHistory] 更新决议: %s | %s | %s", configID, marketSlug, resolution)
+	// 写入决议/卖出日志
+	line := formatSellLine(entry)
+	writeLogLine(line)
 
-	// 如果已有卖出信息，写入完整日志
-	if entry.SellReason != "" && !entry.Written {
-		line := formatCompleteLine(entry)
-		writeLogLine(line)
-		entry.Written = true
-		delete(tradeLogEntries, key) // 清除已完成条目
-	}
+	entry.Written = true
+	delete(tradeLogEntries, key)
+
+	log.Printf("📝 [TradeHistory] 记录决议(已写入): %s | %s | %s", configID, marketSlug, resolution)
 }
 
 // UpdateResolutionForRedemption 更新决议赎回信息
@@ -268,26 +271,24 @@ func UpdateResolutionForRedemption(marketSlug, configID string, resolution strin
 	}
 	entry.SellReason = "决议赎回"
 	entry.PnL = pnl
-	entry.SellAmount = entry.Amount // 决议赎回时，数量等于买入数量
+	entry.SellAmount = entry.Amount
 
-	// 如果获胜，收入 = 数量，卖出价格 = 1.0；如果失败，收入 = 0，卖出价格 = 0.0
 	if resolution == entry.Side {
-		entry.Revenue = entry.Amount // 获胜时收回的是股数 (每股 $1)
+		entry.Revenue = entry.Amount
 		entry.SellPrice = 1.0
 	} else {
 		entry.Revenue = 0
 		entry.SellPrice = 0.0
 	}
 
-	// 写入完整日志
-	if !entry.Written {
-		line := formatCompleteLine(entry)
-		writeLogLine(line)
-		entry.Written = true
-		delete(tradeLogEntries, key)
-	}
+	// 写入日志
+	line := formatSellLine(entry)
+	writeLogLine(line)
 
-	log.Printf("📝 [TradeHistory] 记录决议赎回: %s | %s | %s | PnL=$%.2f", configID, marketSlug, resolution, pnl)
+	entry.Written = true
+	delete(tradeLogEntries, key)
+
+	log.Printf("📝 [TradeHistory] 记录决议赎回(已写入): %s | %s | %s | PnL=$%.2f", configID, marketSlug, resolution, pnl)
 }
 
 // ==================== 日志格式化 ====================
@@ -342,16 +343,13 @@ func formatIndicators(entry *TradeLogEntry) indicatorStrings {
 	}
 }
 
-// formatCompleteLine 格式化完整的日志行
-func formatCompleteLine(entry *TradeLogEntry) string {
-	// 时间格式
+// formatBuyLine 格式化【买入】日志行
+func formatBuyLine(entry *TradeLogEntry) string {
 	buyTimeStr := entry.BuyTime.Format("15:04:05")
-
-	// 使用公共函数格式化指标
 	ind := formatIndicators(entry)
 
-	// 构建日志行
-	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\"\"【%.1f分】【%s】【%.0f】【%.4f】【$%.2f】【$%.2f】\" \"【%s】\"",
+	// 格式: 【时间】【配置】【市场】"【分钟】【买入】【方向】【数量】【价格】【成本】【指标...】"
+	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\"",
 		buyTimeStr,
 		entry.ConfigID,
 		entry.MarketSlug,
@@ -364,6 +362,23 @@ func formatCompleteLine(entry *TradeLogEntry) string {
 		ind.MACD,
 		ind.RSI,
 		ind.RSISlope,
+	)
+	return line
+}
+
+// formatSellLine 格式化【卖出/决议】日志行
+func formatSellLine(entry *TradeLogEntry) string {
+	sellTimeStr := entry.SellTime.Format("15:04:05")
+	if entry.SellTime.IsZero() {
+		sellTimeStr = time.Now().In(estLocation).Format("15:04:05")
+	}
+
+	// 格式: 【时间】【配置】【市场】"【分钟】【卖出类型】【数量】【价格】【收入】【PnL】【决议结果】"
+	// 注意: 对应买入的“分钟”变成了卖出的“分钟”
+	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【%s】【%.0f】【%.4f】【$%.2f】【$%.2f】\" \"【%s】\"",
+		sellTimeStr,
+		entry.ConfigID,
+		entry.MarketSlug,
 		entry.SellMinutesIn,
 		entry.SellReason,
 		entry.SellAmount,
@@ -372,7 +387,6 @@ func formatCompleteLine(entry *TradeLogEntry) string {
 		entry.PnL,
 		entry.Resolution,
 	)
-
 	return line
 }
 

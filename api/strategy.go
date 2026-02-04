@@ -398,8 +398,10 @@ func runSimulationLoop(configs []StrategyConfig) {
 	// 5. 目标符号
 	targets := []string{"Bitcoin", "Ethereum", "Solana", "XRP"}
 
-	// Gamma 客户端
-	gammaClient := src.NewGammaClient(http.DefaultClient)
+	// Gamma 客户端 (使用带超时的 HTTP 客户端)
+	gammaClient := src.NewGammaClient(&http.Client{
+		Timeout: 10 * time.Second,
+	})
 
 	// 定时器
 	scanInterval := configs[0].ScanIntervalSec
@@ -414,10 +416,14 @@ func runSimulationLoop(configs []StrategyConfig) {
 	defer heartbeatTicker.Stop()
 
 	// 初始扫描并启动 MarketManager
+	log.Println("🔍 [Start] 执行初始市场扫描...")
 	scanAndSubscribeWithManager(mgr, gammaClient, allConfigStates, configs, targets, sharedMarketTokens)
+	log.Println("✅ [Start] 初始扫描完成")
 
 	// 启动时检查等待决议的交易
+	log.Println("🔍 [Start] 加载未决议交易...")
 	loadPendingFromDatabase(gammaClient, allPendingResolutions, configs)
+	log.Println("✅ [Start] 未决议交易加载完成")
 
 	log.Println("💓 [启动心跳] 策略已启动，进入主循环...")
 

@@ -78,6 +78,14 @@ var patternInfoMap = map[PatternType]PatternInfo{
 		Name: "无明确形态", SignalType: "震荡", Trend: "不明",
 		Action: "【观望】", Recommend: "❌ 不推荐",
 	},
+	PatternTrendSurgeUp: {
+		Name: "单边上涨", SignalType: "顺势多", Trend: "暴涨 【大涨】",
+		Action: "【买涨】", Recommend: "✅ 强烈推荐",
+	},
+	PatternTrendSurgeDown: {
+		Name: "单边下跌", SignalType: "顺势空", Trend: "暴跌 【大跌】",
+		Action: "【买跌】", Recommend: "✅ 强烈推荐",
+	},
 }
 
 // PatternDetectInput 形态检测输入
@@ -333,4 +341,357 @@ func (r *PatternResult) IsBuyDown() bool {
 // ShouldHold 判断是否应该观望
 func (r *PatternResult) ShouldHold() bool {
 	return r.ActionSuggestion == "【观望】"
+}
+
+// ==================== TrendSurge (单边加速) ====================
+
+// TrendSurge Pattern 类型
+const (
+	PatternTrendSurgeUp   PatternType = "TREND_SURGE_UP"   // 📈 单边上涨
+	PatternTrendSurgeDown PatternType = "TREND_SURGE_DOWN" // 📉 单边下跌
+)
+
+// TrendSurgeInput 单边加速检测输入
+type TrendSurgeInput struct {
+	TimeRemaining int     // 剩余秒数
+	CurrentPrice  float64 // 当前价格
+	OpenPrice     float64 // 15m 开盘价
+	StrikePrice   float64 // 行权价
+	VWAP          float64 // 成交量加权平均价
+	PolyPrice     float64 // Polymarket 合约价格 (0-1)
+	ATR           float64 // 14 周期 ATR
+	Sigma15m      float64 // 15m 波动率 (StdDev)
+	Sigma30s      float64 // 30s 波动率 (突刺检测)
+
+	// 技术指标
+	MACD     *MACDResult // MACD 结果
+	RSI      float64     // RSI 当前值
+	RSISlope float64     // RSI 斜率
+	VolSlope float64     // 成交量斜率 (归一化)
+
+	// Heiken Ashi
+	HeikenAshi []HeikenAshiCandle // 最近 3-5 根 HA 蜡烛
+
+	// Phase 3 专用
+	PriceVelocity float64 // 平滑后的价格速度 (每秒)
+}
+
+// TrendSurgeResult 单边加速检测结果
+type TrendSurgeResult struct {
+	Phase       int     // 阶段 (1, 2, 3, 4)
+	Score       int     // 评分 (0-100)
+	Side        string  // 方向 ("UP", "DOWN", "NONE")
+	VetoReason  string  // 被否决原因 (如适用)
+	ZScore      float64 // Z-Score (Phase 3)
+	IsTriggered bool    // 是否触发 (Score >= 80 且无 Veto)
+}
+
+// DetectTrendSurge 检测单边加速形态
+func DetectTrendSurge(input TrendSurgeInput) TrendSurgeResult {
+	result := TrendSurgeResult{
+		Side: "NONE",
+	}
+
+	// ========== 1. 阶段判定 ==========
+	if input.TimeRemaining < 60 {
+		result.Phase = 4
+	} else if input.TimeRemaining < 180 {
+		result.Phase = 3
+	} else if input.TimeRemaining < 600 {
+		result.Phase = 2
+	} else {
+		result.Phase = 1
+	}
+
+	// ========== 2. 硬性过滤 (Hard Vetoes) ==========
+
+	// 2.1 Phase 4 禁区
+	if result.Phase == 4 {
+		result.VetoReason = "Phase 4 禁区 (剩余 < 60s)"
+		return result
+	}
+
+	// 计算基础指标
+	priceChange := 0.0
+	if input.OpenPrice > 0 {
+		priceChange = (input.CurrentPrice - input.OpenPrice) / input.OpenPrice
+	}
+	vwapDist := 0.0
+	if input.VWAP > 0 {
+		vwapDist = (input.CurrentPrice - input.VWAP) / input.VWAP
+	}
+
+	// 判断方向
+	isUptrend := priceChange > 0
+
+	// 2.2 趋势反转 (VWAP 位置检查)
+	if isUptrend && input.CurrentPrice < input.VWAP {
+		result.VetoReason = "趋势反转: 做多但价格 < VWAP"
+		return result
+	}
+	if !isUptrend && input.CurrentPrice > input.VWAP {
+		result.VetoReason = "趋势反转: 做空但价格 > VWAP"
+		return result
+	}
+
+	// 2.3 动能背离 (Phase 1 & 2)
+	if result.Phase <= 2 {
+		if isUptrend && input.RSISlope < -0.15 { // 放宽到 -0.15
+			result.VetoReason = "动能背离: 价格涨但 RSI 下降"
+			return result
+		}
+		if !isUptrend && input.RSISlope > 0.15 { // 放宽到 0.15
+			result.VetoReason = "动能背离: 价格跌但 RSI 上升"
+			return result
+		}
+	}
+
+	// 2.4 VWAP 过热
+	maxVWAPDist := 0.015 // 默认提升到 1.5%
+	if input.ATR > 0 && input.CurrentPrice > 0 {
+		computed := 2 * input.ATR / input.CurrentPrice
+		if computed > 0.01 { // 最小 1%
+			maxVWAPDist = computed
+		}
+	}
+	if math.Abs(vwapDist) > maxVWAPDist {
+		result.VetoReason = "VWAP 过热: 偏离度过大"
+		return result
+	}
+
+	// 2.5 量价背离 (Phase 1 特有)
+	// [已放宽] 在启动阶段，允许缩量上涨 (惜售)，只要 VolSlope 不是剧烈下降即可
+	if result.Phase == 1 && isUptrend && input.VolSlope < -0.1 {
+		result.VetoReason = "量价背离: 严重缩量上涨"
+		return result
+	}
+
+	// 2.6 波动率突刺 (Phase 3 特有)
+	if result.Phase == 3 && input.Sigma15m > 0 {
+		if input.Sigma30s > 2*input.Sigma15m {
+			result.VetoReason = "波动率突刺: 黑天鹅预警"
+			return result
+		}
+	}
+
+	// 2.7 行权价缺失 (Phase 3 特有)
+	if result.Phase == 3 && input.StrikePrice <= 0 {
+		result.VetoReason = "行权价缺失: Phase 3 强制观察模式"
+		return result
+	}
+
+	// 2.7.1 行权价异常检查 (Phase 3 特有)
+	if result.Phase == 3 && input.StrikePrice > 0 && input.CurrentPrice > 0 {
+		priceDiff := math.Abs(input.StrikePrice-input.CurrentPrice) / input.CurrentPrice
+		if priceDiff > 0.2 { // 偏离超过 20%
+			result.VetoReason = "行权价异常: 偏离当前价格过大"
+			return result
+		}
+	}
+
+	// 2.8 获利期望不足 (Minimum Edge)
+	if input.PolyPrice > 0 && input.PolyPrice < 1 {
+		var edge float64
+		if isUptrend {
+			// 做多: 买 YES，期望收益 = 1 - 买入价
+			edge = 1 - input.PolyPrice
+		} else {
+			// 做空: 买 NO，期望收益 = 买入价 (input.PolyPrice 应该是 NO 的价格)
+			edge = input.PolyPrice
+		}
+		if edge < 0.05 {
+			result.VetoReason = "获利期望不足: 预期利润 < 5%"
+			return result
+		}
+	}
+
+	// ========== 3. 分阶段评分 ==========
+	score := 0
+
+	switch result.Phase {
+	case 1:
+		score = scoreTrendSurgePhase1(input, priceChange, isUptrend)
+	case 2:
+		score = scoreTrendSurgePhase2(input, priceChange, vwapDist, isUptrend, maxVWAPDist)
+	case 3:
+		score, result.ZScore = scoreTrendSurgePhase3(input, vwapDist, isUptrend)
+	}
+
+	result.Score = score
+
+	// 设置方向
+	if isUptrend {
+		result.Side = "UP"
+	} else {
+		result.Side = "DOWN"
+	}
+
+	// 判断是否触发
+	result.IsTriggered = score >= 70 // [已放宽] 70分即可触发
+
+	return result
+}
+
+// scoreTrendSurgePhase1 Phase 1 评分 (趋势确立期)
+func scoreTrendSurgePhase1(input TrendSurgeInput, priceChange float64, isUptrend bool) int {
+	score := 0
+
+	// 1. Price vs Open (20分)
+	if math.Abs(priceChange) > 0.0008 { // 0.08%
+		if (isUptrend && priceChange > 0) || (!isUptrend && priceChange < 0) {
+			score += 20
+		}
+	}
+
+	// 2. Heiken Ashi (20分)
+	if len(input.HeikenAshi) >= 2 { // [已放宽] 2连同色即可
+		color, count := CountConsecutive(input.HeikenAshi)
+		if count >= 2 {
+			// 检查最新一根是否无反向影线
+			latest := input.HeikenAshi[len(input.HeikenAshi)-1]
+			isGreen := color == "green"
+			if HasNoReverseShadow(latest, isGreen, 0.05) {
+				score += 20
+			} else {
+				score += 10 // 有轻微影线
+			}
+		}
+	}
+
+	// 3. MACD (20分)
+	if input.MACD != nil {
+		if isUptrend && input.MACD.Histogram > 0 && input.MACD.HistDelta > 0 {
+			score += 20
+		} else if !isUptrend && input.MACD.Histogram < 0 && input.MACD.HistDelta < 0 {
+			score += 20
+		}
+	}
+
+	// 4. Vol Slope (20分)
+	if input.VolSlope > -0.05 { // [已放宽] 允许微弱回调
+		score += 20
+	}
+
+	// 5. RSI Slope (20分)
+	if math.Abs(input.RSISlope) > 0.2 {
+		if (isUptrend && input.RSISlope > 0) || (!isUptrend && input.RSISlope < 0) {
+			score += 20
+		}
+	}
+
+	return score
+}
+
+// scoreTrendSurgePhase2 Phase 2 评分 (趋势中继期)
+func scoreTrendSurgePhase2(input TrendSurgeInput, priceChange, vwapDist float64, isUptrend bool, maxVWAPDist float64) int {
+	score := 0
+
+	// 1. Price vs Open (30分)
+	if math.Abs(priceChange) > 0.0015 { // 0.15%
+		if (isUptrend && priceChange > 0) || (!isUptrend && priceChange < 0) {
+			score += 30
+		}
+	}
+
+	// 2. VWAP Dist (40分)
+	absVWAPDist := math.Abs(vwapDist)
+	if absVWAPDist > 0.0005 && absVWAPDist < maxVWAPDist { // [已放宽] > 0.05% 即可
+		score += 40
+	} else if absVWAPDist > 0.0003 {
+		score += 20 // 部分分数
+	}
+
+	// 3. Heiken Ashi (10分)
+	if len(input.HeikenAshi) >= 2 { // [已放宽] 2连
+		_, count := CountConsecutive(input.HeikenAshi)
+		if count >= 2 {
+			score += 10
+		}
+	}
+
+	// 4. MACD (10分)
+	if input.MACD != nil {
+		if isUptrend && input.MACD.Histogram > 0 {
+			score += 10
+		} else if !isUptrend && input.MACD.Histogram < 0 {
+			score += 10
+		}
+	}
+
+	// 5. Vol Slope (10分)
+	if input.VolSlope > -0.05 {
+		score += 10
+	}
+
+	return score
+}
+
+// scoreTrendSurgePhase3 Phase 3 评分 (决议锁定期)
+func scoreTrendSurgePhase3(input TrendSurgeInput, vwapDist float64, isUptrend bool) (int, float64) {
+	score := 0
+
+	// 计算 Z-Score
+	zScore := 0.0
+	if input.Sigma15m > 0 && input.StrikePrice > 0 {
+		safetyMargin := input.CurrentPrice - input.StrikePrice
+		if !isUptrend {
+			safetyMargin = input.StrikePrice - input.CurrentPrice
+		}
+		zScore = safetyMargin / input.Sigma15m
+	}
+
+	// 1. Z-Score (60分)
+	if math.Abs(zScore) > 2.5 {
+		score += 60
+	} else if math.Abs(zScore) > 1.5 {
+		score += 30 // 部分分数
+	}
+
+	// 2. VWAP Support (20分)
+	if isUptrend && vwapDist > 0 {
+		score += 20
+	} else if !isUptrend && vwapDist < 0 {
+		score += 20
+	}
+
+	// 3. Heiken Ashi 未变色 (20分)
+	if len(input.HeikenAshi) >= 1 {
+		latest := input.HeikenAshi[len(input.HeikenAshi)-1]
+		if (isUptrend && latest.IsGreen) || (!isUptrend && !latest.IsGreen) {
+			score += 20
+		}
+	}
+
+	// 4. 速度风险判定 (扣分项)
+	if input.StrikePrice > 0 && input.PriceVelocity != 0 {
+		safetyMargin := math.Abs(input.CurrentPrice - input.StrikePrice)
+		timeRemainingSec := float64(input.TimeRemaining)
+		projectedImpact := math.Abs(input.PriceVelocity) * timeRemainingSec
+
+		// 检查速度方向是否指向行权价
+		velocityTowardsStrike := false
+		if isUptrend && input.PriceVelocity < 0 {
+			velocityTowardsStrike = true
+		} else if !isUptrend && input.PriceVelocity > 0 {
+			velocityTowardsStrike = true
+		}
+
+		if velocityTowardsStrike && projectedImpact > 0.8*safetyMargin {
+			score = 0 // 速度风险，直接归零
+		}
+	}
+
+	return score, zScore
+}
+
+// GetTrendSurgeSideString 获取 TrendSurge 方向的中文描述
+func GetTrendSurgeSideString(side string) string {
+	switch side {
+	case "UP":
+		return "📈 买涨"
+	case "DOWN":
+		return "📉 买跌"
+	default:
+		return "🔍 观望"
+	}
 }

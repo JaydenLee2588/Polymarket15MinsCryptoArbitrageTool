@@ -196,7 +196,9 @@ func runPatternStrategyLoop(configs []PatternStrategyConfig) {
 
 		case <-ticker.C:
 			// 同步市场状态
+			//log.Println("[DEBUG] Pattern tick - 开始同步市场状态...")
 			syncPatternMarketStates()
+			//log.Println("[DEBUG] Pattern tick - 市场状态同步完成")
 
 			// ===== 修复死锁: 先收集任务，释放锁后再执行 =====
 			var tasks []patternCheckTask
@@ -274,8 +276,11 @@ func runPatternStrategyLoop(configs []PatternStrategyConfig) {
 // syncPatternMarketStates 从主策略同步市场状态
 func syncPatternMarketStates() {
 	// 获取主策略的市场状态
+	//log.Println("[DEBUG] syncPatternMarketStates - 准备调用 GetActiveMarketStates...")
 	mainStates := GetActiveMarketStates()
+	//log.Println("[DEBUG] syncPatternMarketStates - GetActiveMarketStates 返回完成")
 	if mainStates == nil {
+		//log.Println("[DEBUG] syncPatternMarketStates - mainStates 为 nil，跳过同步")
 		return
 	}
 
@@ -362,6 +367,149 @@ func checkPatternBuySignal(state *PatternMarketState, cfg PatternStrategyConfig)
 		prevRSI = src.ComputeRSI(closes[:len(closes)-1], 14)
 	}
 
+	// ===== TrendSurge 检测 =====
+	// 计算额外指标
+	atr := src.ComputeATR(klines, 14)
+	volumes := src.GetVolumes(klines)
+	var volSlope float64
+	if len(volumes) >= 5 {
+		volSlope = src.LinearRegressionSlope(volumes[len(volumes)-5:])
+	}
+
+	// 计算波动率
+	var sigma15m, sigma30s float64
+	if len(closes) >= 15 {
+		sigma15m = src.ComputeStdDev(closes[len(closes)-15:])
+	}
+	if len(closes) >= 5 {
+		sigma30s = src.ComputeStdDev(closes[len(closes)-5:]) // 约 5 分钟 (5根 1m K线)
+	}
+
+	// Heiken Ashi
+	haCandles := src.ComputeHeikenAshi(klines)
+	var recentHA []src.HeikenAshiCandle
+	if len(haCandles) >= 5 {
+		recentHA = haCandles[len(haCandles)-5:]
+	} else {
+		recentHA = haCandles
+	}
+
+	// 计算剩余时间
+	timeRemaining := int(time.Until(state.EndTime).Seconds())
+	if timeRemaining < 0 {
+		timeRemaining = 0
+	}
+
+	// 获取 15m 开盘价 (使用 15 分钟前的 K 线开盘价)
+	openPrice := 0.0
+	if len(klines) >= 15 {
+		openPrice = klines[len(klines)-15].Open
+	} else if len(klines) > 0 {
+		openPrice = klines[0].Open // 数据不足时使用最早的 K 线
+	}
+
+	// 获取 Polymarket 价格 (用于 Minimum Edge 计算)
+	polyPriceUp := state.LatestPrices["UP"]
+	polyPriceDown := state.LatestPrices["DOWN"]
+
+	// 构建 TrendSurge 输入
+	trendSurgeInput := src.TrendSurgeInput{
+		TimeRemaining: timeRemaining,
+		CurrentPrice:  currentPrice,
+		OpenPrice:     openPrice,
+		StrikePrice:   state.StrikePrice,
+		VWAP:          vwap,
+		PolyPrice:     polyPriceUp, // 默认检测做多
+		ATR:           atr,
+		Sigma15m:      sigma15m,
+		Sigma30s:      sigma30s,
+		MACD:          macd,
+		RSI:           rsi14,
+		RSISlope:      rsiSlope,
+		VolSlope:      volSlope,
+		HeikenAshi:    recentHA,
+		PriceVelocity: 0, // 暂不支持价格速度，需要历史价格缓存
+	}
+
+	// 分别检测做多和做空，选择评分最高的
+	trendSurgeInputLong := trendSurgeInput
+	trendSurgeInputLong.PolyPrice = polyPriceUp
+
+	trendSurgeInputShort := trendSurgeInput
+	trendSurgeInputShort.PolyPrice = polyPriceDown
+
+	// 检测做多
+	trendSurgeResultLong := src.DetectTrendSurge(trendSurgeInputLong)
+
+	// 检测做空
+	trendSurgeResultShort := src.DetectTrendSurge(trendSurgeInputShort)
+
+	// 选择评分最高的结果
+	var trendSurgeResult src.TrendSurgeResult
+	if trendSurgeResultLong.Score > trendSurgeResultShort.Score {
+		trendSurgeResult = trendSurgeResultLong
+	} else {
+		trendSurgeResult = trendSurgeResultShort
+	}
+
+	// 调试日志: 记录被否决的信号 (仅在某些条件下，或完全注释掉以减少刷屏)
+	// if trendSurgeResult.VetoReason != "" {
+	// 	log.Printf("🚫 [TrendSurge][%s] 被否决: %s | Phase=%d, Score=%d, Side=%s | 市场=%s",
+	// 		cfg.ID, trendSurgeResult.VetoReason, trendSurgeResult.Phase, trendSurgeResult.Score, trendSurgeResult.Side, state.Slug)
+	// }
+
+	// 如果 TrendSurge 触发，检查是否在配置的 Pattern 列表中
+	if trendSurgeResult.IsTriggered {
+		var tsPatternType src.PatternType
+		if trendSurgeResult.Side == "UP" {
+			tsPatternType = src.PatternTrendSurgeUp
+		} else {
+			tsPatternType = src.PatternTrendSurgeDown
+		}
+
+		if cfg.ContainsPattern(tsPatternType) {
+			log.Printf("📈 [TrendSurge][%s] 触发! Phase=%d, Score=%d, Side=%s, Z=%.2f | 市场=%s",
+				cfg.ID, trendSurgeResult.Phase, trendSurgeResult.Score, trendSurgeResult.Side, trendSurgeResult.ZScore, state.Slug)
+
+			// 获取价格和执行买入
+			side := trendSurgeResult.Side
+			price, ok := state.LatestPrices[side]
+			if ok && price > 0 {
+				amount := cfg.GetShareAmount(price)
+				tokenID, tokenOK := state.SideToTokenID[side]
+
+				if amount > 0 && tokenOK && tokenID != "" {
+					// 防止重复下单
+					patternMarketStatesMu.Lock()
+					if state.Positions == nil {
+						state.Positions = make(map[string]*PatternPosition)
+					}
+					if existing, exists := state.Positions[cfg.ID]; exists && existing != nil {
+						patternMarketStatesMu.Unlock()
+						// 已有持仓，跳过
+					} else {
+						state.Positions[cfg.ID] = &PatternPosition{ConfigID: cfg.ID, Pending: true}
+						patternMarketStatesMu.Unlock()
+
+						patternName := "TrendSurge-" + trendSurgeResult.Side
+						buyIndicators := BuyIndicatorSnapshot{
+							VWAPDist:      vwapDist,
+							RSI:           rsi14,
+							RSISlope:      rsiSlope,
+							MACDLine:      macd.MACD,
+							MACDSignal:    macd.Signal,
+							MACDHistogram: macd.Histogram,
+							MACDHistDelta: macd.HistDelta,
+						}
+						executePatternBuy(state, cfg, side, tokenID, price, amount, patternName, buyIndicators)
+					}
+				}
+			}
+			return // TrendSurge 触发后不再检测传统 Pattern
+		}
+	}
+
+	// ===== 传统 Pattern 检测 =====
 	// 调用 Pattern 检测
 	patternInput := src.PatternDetectInput{
 		VWAPDist: vwapDist,
