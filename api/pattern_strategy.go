@@ -311,11 +311,13 @@ func syncPatternMarketStates() {
 				}
 			}
 
-			// 同步价格
+			// 同步价格 (需要持有 simMu 锁，因为 mainState.LatestPrices 可能被并发写入)
 			state := patternMarketStates[slug]
+			simMu.Lock()
 			for side, price := range mainState.LatestPrices {
 				state.LatestPrices[side] = price
 			}
+			simMu.Unlock()
 		}
 	}
 
@@ -502,6 +504,13 @@ func checkPatternBuySignal(state *PatternMarketState, cfg PatternStrategyConfig)
 							MACDHistDelta: macd.HistDelta,
 						}
 						executePatternBuy(state, cfg, side, tokenID, price, amount, patternName, buyIndicators)
+					}
+				} else {
+					// 明确记录不下单的原因
+					if amount <= 0 {
+						log.Printf("⚠️ [TrendSurge][%s] 触发但因【价格超限】跳过: Price=%.4f > MaxLimit (Amount=0)", cfg.ID, price)
+					} else if !tokenOK || tokenID == "" {
+						log.Printf("⚠️ [TrendSurge][%s] 触发但因【Token无效】跳过: TokenID=%s", cfg.ID, tokenID)
 					}
 				}
 			}

@@ -20,9 +20,10 @@
 #
 # 审核优化建议：
 #  根据 logs 里的今日log文件进行下列操作（请参考scripts里的脚本文件）：
-#  1.分策略，计算每种策略的次数，总PnL和胜率；
+#  1.分策略，计算每种策略的 次数，总PnL，胜率，决议和出售比例 ；
 #  2.分策略，按照下单价格进行一下聚合；
 #  3.分策略，按照下单时间进行一下聚合；
+# 讲整理后的文档，放到 logs 的今日文件夹下，并命名为 strategy_analysis_HHMM.md (HHMM是分析的LOG文件名的时间)
 # ==============================================================================
 
 groups:
@@ -109,7 +110,7 @@ groups:
     patterns:
       - "顶背离"
       - "底背离"
-    sell_threshold: 0.20
+    sell_threshold: 0.10
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
     symbols:
@@ -120,7 +121,7 @@ groups:
 
   - id: "Pattern策略5"
     trend_window_sec_start: 30
-    trend_window_sec_end: 320
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.40
     leg1_share_price_1: 0.50
     leg1_share_price_2: 0.70

@@ -436,26 +436,20 @@ func DetectTrendSurge(input TrendSurgeInput) TrendSurgeResult {
 
 	// 2.3 动能背离 (Phase 1 & 2)
 	if result.Phase <= 2 {
-		if isUptrend && input.RSISlope < -0.15 { // 放宽到 -0.15
-			result.VetoReason = "动能背离: 价格涨但 RSI 下降"
+		if isUptrend && input.RSISlope < -0.1 { // 严格: -0.1
+			result.VetoReason = "动能背离: 价格涨但 RSI 下降 (顶背离)"
 			return result
 		}
-		if !isUptrend && input.RSISlope > 0.15 { // 放宽到 0.15
-			result.VetoReason = "动能背离: 价格跌但 RSI 上升"
+		if !isUptrend && input.RSISlope > 0.1 { // 严格: 0.1
+			result.VetoReason = "动能背离: 价格跌但 RSI 上升 (底背离)"
 			return result
 		}
 	}
 
 	// 2.4 VWAP 过热
-	maxVWAPDist := 0.015 // 默认提升到 1.5%
-	if input.ATR > 0 && input.CurrentPrice > 0 {
-		computed := 2 * input.ATR / input.CurrentPrice
-		if computed > 0.01 { // 最小 1%
-			maxVWAPDist = computed
-		}
-	}
+	maxVWAPDist := 0.01 // 严格限制在 1.0%
 	if math.Abs(vwapDist) > maxVWAPDist {
-		result.VetoReason = "VWAP 过热: 偏离度过大"
+		result.VetoReason = "VWAP 过热: 偏离度 > 1.0%"
 		return result
 	}
 
@@ -527,7 +521,7 @@ func DetectTrendSurge(input TrendSurgeInput) TrendSurgeResult {
 	}
 
 	// 判断是否触发
-	result.IsTriggered = score >= 70 // [已放宽] 70分即可触发
+	result.IsTriggered = score >= 80 // [严格] 80分触发
 
 	return result
 }
@@ -543,40 +537,49 @@ func scoreTrendSurgePhase1(input TrendSurgeInput, priceChange float64, isUptrend
 		}
 	}
 
-	// 2. Heiken Ashi (20分)
-	if len(input.HeikenAshi) >= 2 { // [已放宽] 2连同色即可
+	// 2. Heiken Ashi (30分) - [严格] 要求3连同色
+	if len(input.HeikenAshi) >= 3 {
 		color, count := CountConsecutive(input.HeikenAshi)
-		if count >= 2 {
-			// 检查最新一根是否无反向影线
+		if count >= 3 {
+			// 检查最新一根是否无反向影线 (5%容错)
 			latest := input.HeikenAshi[len(input.HeikenAshi)-1]
 			isGreen := color == "green"
 			if HasNoReverseShadow(latest, isGreen, 0.05) {
-				score += 20
+				score += 30
 			} else {
-				score += 10 // 有轻微影线
+				score += 15 // 有轻微影线，只给一半分
 			}
 		}
 	}
 
-	// 3. MACD (20分)
+	// 3. MACD (30分) - [严格] 要求柱状图同向 + 增强中
 	if input.MACD != nil {
 		if isUptrend && input.MACD.Histogram > 0 && input.MACD.HistDelta > 0 {
-			score += 20
+			score += 30
 		} else if !isUptrend && input.MACD.Histogram < 0 && input.MACD.HistDelta < 0 {
-			score += 20
+			score += 30
 		}
 	}
 
-	// 4. Vol Slope (20分)
-	if input.VolSlope > -0.05 { // [已放宽] 允许微弱回调
-		score += 20
+	// 4. Vol Slope (10分) - [严格] 要求量增
+	if input.VolSlope > 0 {
+		score += 10
 	}
 
-	// 5. RSI Slope (20分)
+	// 5. RSI Slope (10分)
 	if math.Abs(input.RSISlope) > 0.2 {
 		if (isUptrend && input.RSISlope > 0) || (!isUptrend && input.RSISlope < 0) {
-			score += 20
+			score += 10
 		}
+	}
+
+	// 扣分项: 缩量上涨/下跌 (-20分)
+	if input.VolSlope < 0 {
+		score -= 20
+	}
+
+	if score < 0 {
+		score = 0
 	}
 
 	return score
@@ -586,41 +589,48 @@ func scoreTrendSurgePhase1(input TrendSurgeInput, priceChange float64, isUptrend
 func scoreTrendSurgePhase2(input TrendSurgeInput, priceChange, vwapDist float64, isUptrend bool, maxVWAPDist float64) int {
 	score := 0
 
-	// 1. Price vs Open (30分)
+	// 1. Price vs Open (30分) - [严格] 必须脱离震荡区
 	if math.Abs(priceChange) > 0.0015 { // 0.15%
 		if (isUptrend && priceChange > 0) || (!isUptrend && priceChange < 0) {
 			score += 30
 		}
 	}
 
-	// 2. VWAP Dist (40分)
+	// 2. VWAP Dist (20分) - [严格] 健康偏离 0.1% - 0.8%
 	absVWAPDist := math.Abs(vwapDist)
-	if absVWAPDist > 0.0005 && absVWAPDist < maxVWAPDist { // [已放宽] > 0.05% 即可
-		score += 40
-	} else if absVWAPDist > 0.0003 {
-		score += 20 // 部分分数
+	if absVWAPDist > 0.001 && absVWAPDist < 0.008 { // 0.1% - 0.8%
+		score += 20
 	}
 
-	// 3. Heiken Ashi (10分)
-	if len(input.HeikenAshi) >= 2 { // [已放宽] 2连
+	// 3. Heiken Ashi (20分) - [严格] 要求3连同色
+	if len(input.HeikenAshi) >= 3 {
 		_, count := CountConsecutive(input.HeikenAshi)
-		if count >= 2 {
-			score += 10
+		if count >= 3 {
+			score += 20
 		}
 	}
 
-	// 4. MACD (10分)
+	// 4. MACD (20分)
 	if input.MACD != nil {
 		if isUptrend && input.MACD.Histogram > 0 {
-			score += 10
+			score += 20
 		} else if !isUptrend && input.MACD.Histogram < 0 {
-			score += 10
+			score += 20
 		}
 	}
 
 	// 5. Vol Slope (10分)
 	if input.VolSlope > -0.05 {
 		score += 10
+	}
+
+	// 扣分项: 严重缩量 (-20分)
+	if input.VolSlope < -0.1 {
+		score -= 20
+	}
+
+	if score < 0 {
+		score = 0
 	}
 
 	return score

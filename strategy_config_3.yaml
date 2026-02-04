@@ -115,9 +115,9 @@ groups:
   - id: "Pattern策略5"
     trend_window_sec_start: 30
     trend_window_sec_end: 600
-    leg0_share_price_0: 0.10
-    leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.70
+    leg0_share_price_0: 0.50
+    leg1_share_price_1: 0.65
+    leg1_share_price_2: 0.78
     leg1_share_price_3: 0.85
     leg1_share_amount_1: 10
     leg1_share_amount_2: 8
