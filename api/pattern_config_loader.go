@@ -45,6 +45,10 @@ type PatternStrategyConfig struct {
 	// 交易模式 (从环境变量读取)
 	TradingMode string // "simulation" 或 "real"
 	OrderType   string // "GTC", "FOK", "FAK"
+
+	// v4.4 Sniper 模式配置
+	SniperMode   bool             // 是否启用 Sniper 模式 (默认 false = Hysteresis)
+	SniperConfig src.SniperConfig // Sniper 策略参数
 }
 
 // Pattern 名称映射 (中文 → PatternType)
@@ -66,22 +70,32 @@ var patternNameMap = map[string]src.PatternType{
 // ==================== YAML 结构 ====================
 
 type patternConfigGroupYAML struct {
-	ID                         string   `yaml:"id"`
-	TrendWindowSecStart        int      `yaml:"trend_window_sec_start"`
-	TrendWindowSecEnd          int      `yaml:"trend_window_sec_end"`
-	Leg0SharePrice0            float64  `yaml:"leg0_share_price_0"`
-	Leg1SharePrice1            float64  `yaml:"leg1_share_price_1"`
-	Leg1SharePrice2            float64  `yaml:"leg1_share_price_2"`
-	Leg1SharePrice3            float64  `yaml:"leg1_share_price_3"`
-	Leg1ShareAmount1           float64  `yaml:"leg1_share_amount_1"`
-	Leg1ShareAmount2           float64  `yaml:"leg1_share_amount_2"`
-	Leg1ShareAmount3           float64  `yaml:"leg1_share_amount_3"`
-	MaxSlippage                float64  `yaml:"max_slippage"`
-	Patterns                   []string `yaml:"patterns"`
-	SellThreshold              float64  `yaml:"sell_threshold"`
-	EnableStopLoss             bool     `yaml:"enable_stop_loss"`               // 时间止损开关
-	StopLossMinutesBeforeClose int      `yaml:"stop_loss_minutes_before_close"` // 距离结算前X分钟止损
-	Symbols                    []string `yaml:"symbols"`
+	ID                         string            `yaml:"id"`
+	TrendWindowSecStart        int               `yaml:"trend_window_sec_start"`
+	TrendWindowSecEnd          int               `yaml:"trend_window_sec_end"`
+	Leg0SharePrice0            float64           `yaml:"leg0_share_price_0"`
+	Leg1SharePrice1            float64           `yaml:"leg1_share_price_1"`
+	Leg1SharePrice2            float64           `yaml:"leg1_share_price_2"`
+	Leg1SharePrice3            float64           `yaml:"leg1_share_price_3"`
+	Leg1ShareAmount1           float64           `yaml:"leg1_share_amount_1"`
+	Leg1ShareAmount2           float64           `yaml:"leg1_share_amount_2"`
+	Leg1ShareAmount3           float64           `yaml:"leg1_share_amount_3"`
+	MaxSlippage                float64           `yaml:"max_slippage"`
+	Patterns                   []string          `yaml:"patterns"`
+	SellThreshold              float64           `yaml:"sell_threshold"`
+	EnableStopLoss             bool              `yaml:"enable_stop_loss"`               // 时间止损开关
+	StopLossMinutesBeforeClose int               `yaml:"stop_loss_minutes_before_close"` // 距离结算前X分钟止损
+	Symbols                    []string          `yaml:"symbols"`
+	Sniper                     *SniperConfigYAML `yaml:"sniper"` // v4.4 Sniper 配置 (可选)
+}
+
+type SniperConfigYAML struct {
+	ZScoreEntryThreshold float64 `yaml:"zscore_entry_threshold"`
+	ZScoreExitThreshold  float64 `yaml:"zscore_exit_threshold"`
+	ProfitExitPct        float64 `yaml:"profit_exit_pct"`
+	SpreadMax            float64 `yaml:"spread_max"`
+	DeadFishMinEdge      float64 `yaml:"dead_fish_min_edge"`
+	EdgeThreshold        float64 `yaml:"edge_threshold"`
 }
 
 type patternConfigFileYAML struct {
@@ -163,6 +177,9 @@ func LoadPatternConfigs(filename string) ([]PatternStrategyConfig, error) {
 			Symbols:                    symbols,
 			TradingMode:                tradingMode,
 			OrderType:                  orderType,
+			// v4.4 Sniper 模式: 通过环境变量或配置控制
+			SniperMode:   os.Getenv("SNIPER_MODE") == "true",
+			SniperConfig: loadSniperConfig(g.Sniper),
 		}
 		configs = append(configs, config)
 	}
@@ -245,4 +262,36 @@ func (c *PatternStrategyConfig) GetShareAmount(price float64) float64 {
 		return c.ShareAmount2
 	}
 	return c.ShareAmount3
+}
+
+// loadSniperConfig 加载 Sniper 配置 (合并默认值)
+func loadSniperConfig(yamlCfg *SniperConfigYAML) src.SniperConfig {
+	// 使用默认配置作为基础
+	cfg := src.DefaultSniperConfig()
+
+	if yamlCfg == nil {
+		return cfg
+	}
+
+	// 覆盖非零值
+	if yamlCfg.ZScoreEntryThreshold > 0 {
+		cfg.ZScoreEntryThreshold = yamlCfg.ZScoreEntryThreshold
+	}
+	if yamlCfg.ZScoreExitThreshold > 0 {
+		cfg.ZScoreExitThreshold = yamlCfg.ZScoreExitThreshold
+	}
+	if yamlCfg.ProfitExitPct > 0 {
+		cfg.ProfitExitPct = yamlCfg.ProfitExitPct
+	}
+	if yamlCfg.SpreadMax > 0 {
+		cfg.SpreadMax = yamlCfg.SpreadMax
+	}
+	if yamlCfg.DeadFishMinEdge > 0 {
+		cfg.DeadFishMinEdge = yamlCfg.DeadFishMinEdge
+	}
+	if yamlCfg.EdgeThreshold > 0 {
+		cfg.EdgeThreshold = yamlCfg.EdgeThreshold
+	}
+
+	return cfg
 }

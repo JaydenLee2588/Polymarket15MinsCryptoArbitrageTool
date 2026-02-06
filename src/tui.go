@@ -382,7 +382,8 @@ func (t *ArbitrageTUI) renderTechnicalIndicators() {
 	vwap := ComputeSessionVWAP(klines)
 	vwapDist := (currentPrice - vwap) / vwap
 	ha := ComputeHeikenAshi(klines)
-	haColor, haCount := CountConsecutive(ha)
+	// 使用稳定（已完成）的蜡烛计算趋势 (防止当前 K 线跳变导致计数剧烈波动)
+	haColor, haCount := CountConsecutive(ha[:len(ha)-1])
 
 	// 计算概率
 	// 使用 Strike Price（如果有）或 Current Price
@@ -431,7 +432,21 @@ func (t *ArbitrageTUI) renderTechnicalIndicators() {
 	t.probabilityDown = prob.RawDown
 
 	tuiPrintf("📊 Market Data (%s)\n", symbol)
-	tuiPrintf("   Current Price:  %s%.2f%s\n", TUIColorBold, currentPrice, TUIColorReset)
+
+	currentPriceStr := fmt.Sprintf("%s%.2f%s", TUIColorBold, currentPrice, TUIColorReset)
+	if t.strikePrice > 0 {
+		diff := currentPrice - t.strikePrice
+		percent := (diff / t.strikePrice) * 100
+
+		color := TUIColorReset
+		if diff > 0 {
+			color = TUIColorGreen
+		} else if diff < 0 {
+			color = TUIColorRed
+		}
+		currentPriceStr += fmt.Sprintf(" %s(%+.2f) (%+.2f%%)%s", color, diff, percent, TUIColorReset)
+	}
+	tuiPrintf("   Current Price:  %s\n", currentPriceStr)
 	if t.strikePrice > 0 {
 		tuiPrintf("   Strike Price:   %s%.2f%s (from Binance 15m Open)\n", TUIColorCyan, t.strikePrice, TUIColorReset)
 	} else {
@@ -467,16 +482,25 @@ func (t *ArbitrageTUI) renderTechnicalIndicators() {
 	tuiPrintf("   VWAP:           %.2f  (Dist: %s%.4f%%%s)\n", vwap, vwapColor, vwapDist*100, TUIColorReset)
 
 	// Heiken Ashi
-	haText := haColor
-	haTextColor := TUIColorReset
-	if haColor == "green" {
-		haText = "连涨"
-		haTextColor = TUIColorGreen
-	} else if haColor == "red" {
+	haText := "连涨"
+	haTextColor := TUIColorGreen
+	if haColor == "red" {
 		haText = "连跌"
 		haTextColor = TUIColorRed
 	}
-	tuiPrintf("   Heiken Ashi:    %s%s x %d%s\n", haTextColor, haText, haCount, TUIColorReset)
+
+	// 获取当前 K 线状态
+	currentHA := ha[len(ha)-1]
+	currText := "涨"
+	currColor := TUIColorGreen
+	if !currentHA.IsGreen {
+		currText = "跌"
+		currColor = TUIColorRed
+	}
+
+	tuiPrintf("   Heiken Ashi:    %s%s x %d%s (当前: %s%s%s)\n",
+		haTextColor, haText, haCount, TUIColorReset,
+		currColor, currText, TUIColorReset)
 	tuiPrint("")
 
 	// 形态检测

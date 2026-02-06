@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -65,6 +66,9 @@ type PatternMarketState struct {
 	// Pattern 检测缓存 (避免重复检测)
 	LastPatternCheck map[string]time.Time       // configID -> 上次检测时间
 	LastPattern      map[string]src.PatternType // symbol -> 上次检测到的 Pattern
+
+	// Sniper 冷却期追踪
+	LastSellTime map[string]time.Time // "configID_side" -> 上次卖出时间
 }
 
 // BuyIndicatorSnapshot 买入时的指标快照
@@ -308,12 +312,17 @@ func syncPatternMarketStates() {
 					StrikePrice:      mainState.StrikePrice,
 					Positions:        make(map[string]*PatternPosition),
 					LastPatternCheck: make(map[string]time.Time),
+					LastSellTime:     make(map[string]time.Time), // Sniper 冷却期追踪
 				}
 			}
 
 			// 同步价格 (需要持有 simMu 锁，因为 mainState.LatestPrices 可能被并发写入)
 			state := patternMarketStates[slug]
 			simMu.Lock()
+			// 同步 StrikePrice (可能在初始化后才获取到)
+			if mainState.StrikePrice > 0 {
+				state.StrikePrice = mainState.StrikePrice
+			}
 			for side, price := range mainState.LatestPrices {
 				state.LatestPrices[side] = price
 			}
@@ -342,6 +351,12 @@ func syncPatternMarketStates() {
 
 func checkPatternBuySignal(state *PatternMarketState, cfg PatternStrategyConfig) {
 	binanceSymbol := state.Symbol + "USDT"
+
+	// ===== Sniper 模式分发 =====
+	if cfg.SniperMode {
+		checkSniperBuySignal(state, cfg, binanceSymbol)
+		return
+	}
 
 	// ===== 复用主策略的 Binance WebSocket K线数据 =====
 	if binanceClient == nil {
@@ -826,7 +841,50 @@ func checkPatternSellCondition(state *PatternMarketState, pos *PatternPosition, 
 		}
 	}
 
-	// 2. 检查是否达到卖出阈值 (止盈)
+	// 2. Sniper 模式: Touch-and-Go 止盈逻辑
+	if cfg.SniperMode && state.StrikePrice > 0 {
+		binanceSymbol := state.Symbol + "USDT"
+		if binanceClient != nil {
+			klines := binanceClient.GetHistoricalKlines(binanceSymbol, 60)
+			if len(klines) >= 10 {
+				closes := src.GetCloses(klines)
+				binancePrice := closes[len(closes)-1]
+				sigma := src.ComputeRealtimeSigma(klines, 10)
+				if sigma < 1 {
+					sigma = 50
+				}
+
+				// 计算 Z-Score
+				zScore := src.CalculateZScore(binancePrice, state.StrikePrice, sigma)
+
+				// 计算价格收益 (使用 sell_threshold 作为止盈阈值)
+				priceGain := currentPrice - pos.BuyPrice
+
+				// Touch-and-Go 条件:
+				// 1. Z-Score 回归 (|Z| < zscore_exit_threshold)
+				// 2. 价格收益达到阈值 (使用 sell_threshold)
+				shouldExit := false
+				reason := ""
+
+				if math.Abs(zScore) < cfg.SniperConfig.ZScoreExitThreshold {
+					shouldExit = true
+					reason = "zscore_reverted"
+				} else if priceGain >= cfg.SellThreshold {
+					shouldExit = true
+					reason = "profit_target_reached"
+				}
+
+				if shouldExit {
+					log.Printf("🎯 [Sniper][%s] Touch-and-Go 止盈! Z=%.2f | 收益=%.4f (阈值=%.4f) | 原因=%s | 市场=%s",
+						cfg.ID, zScore, priceGain, cfg.SellThreshold, reason, state.Slug)
+					executePatternSellWithReason(state, pos, cfg, currentPrice, "Sniper:"+reason)
+					return
+				}
+			}
+		}
+	}
+
+	// 3. 传统 Pattern 模式: 检查是否达到卖出阈值 (止盈)
 	priceGain := currentPrice - pos.BuyPrice
 	if priceGain < cfg.SellThreshold {
 		return
@@ -977,8 +1035,15 @@ func executePatternSellWithReason(state *PatternMarketState, pos *PatternPositio
 	// 记录交易历史日志 (卖出)
 	UpdateSellEntry(state.Slug, cfg.ID, sellReason, actualSellPrice, filledAmount, revenue, profit)
 
-	// 清除持仓 (全部成交)
+	// 清除持仓并更新冷却期时间戳
 	patternMarketStatesMu.Lock()
+	// 记录卖出时间 (用于冷却期检查)
+	cooldownKey := cfg.ID + "_" + pos.Side
+	if state.LastSellTime == nil {
+		state.LastSellTime = make(map[string]time.Time)
+	}
+	state.LastSellTime[cooldownKey] = time.Now()
+
 	delete(state.Positions, cfg.ID)
 	patternMarketStatesMu.Unlock()
 }
@@ -1330,4 +1395,226 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ==================== Sniper v4.4 买入检测 ====================
+
+func checkSniperBuySignal(state *PatternMarketState, cfg PatternStrategyConfig, binanceSymbol string) {
+	// ===== Debug日志控制 (每30秒一次) =====
+	debugKey := cfg.ID + "_" + state.Slug + "_trace"
+	patternMarketStatesMu.Lock()
+	lastDebug, hasDebug := state.LastPatternCheck[debugKey]
+	shouldDebug := !hasDebug || time.Since(lastDebug) > 30*time.Second
+	if shouldDebug {
+		state.LastPatternCheck[debugKey] = time.Now()
+	}
+	patternMarketStatesMu.Unlock()
+
+	// 1. 入口检查日志
+	// if shouldDebug {
+	// 	log.Printf("🔍 [Sniper TRACE][%s] Checking %s | Symbol=%s", cfg.ID, state.Slug, binanceSymbol)
+	// }
+
+	// ===== 复用主策略的 Binance WebSocket K线数据 =====
+	if binanceClient == nil {
+		if shouldDebug {
+			log.Printf("⚠️ [Sniper TRACE][%s] BinanceClient is NIL", cfg.ID)
+		}
+		return
+	}
+
+	klines := binanceClient.GetHistoricalKlines(binanceSymbol, 240)
+	if len(klines) < 50 {
+		if shouldDebug {
+			log.Printf("⚠️ [Sniper TRACE][%s] K-Lines insufficient: %d < 50 | Symbol=%s", cfg.ID, len(klines), binanceSymbol)
+		}
+		return
+	}
+
+	closes := src.GetCloses(klines)
+	currentPrice := closes[len(closes)-1]
+
+	// 计算剩余时间
+	timeLeftSec := time.Until(state.EndTime).Seconds()
+	if timeLeftSec < 0 {
+		timeLeftSec = 0
+	}
+
+	// StrikePrice 验证 (数据未就绪时跳过)
+	if state.StrikePrice == 0 {
+		// if shouldDebug {
+		// 	log.Printf("⚠️ [Sniper TRACE][%s] StrikePrice is 0 | Market=%s", cfg.ID, state.Slug)
+		// }
+		return
+	}
+
+	// 计算实时波动率 (最近10根K线)
+	sigma := src.ComputeRealtimeSigma(klines, 10)
+	if sigma <= 1e-6 {
+		// 动态保底: 如果计算出的波动率为0（例如数据不足），使用当前价格的 0.5% 作为预估波动率
+		if len(klines) > 0 {
+			lastPrice := klines[len(klines)-1].Close
+			sigma = lastPrice * 0.005
+		} else {
+			sigma = 1.0 // 无法获取价格时的兜底
+		}
+	}
+
+	// 获取1分钟高低点 (使用前一根已完成K线)
+	high1m, low1m := src.Get1MinHighLowFromLast2(klines)
+
+	// 获取 Polymarket 价格
+	polyPriceUp := state.LatestPrices["UP"]
+	polyPriceDown := state.LatestPrices["DOWN"]
+
+	// 计算价差 (用于滑点熔断)
+	polySpread := 0.0
+	if polyPriceUp > 0 && polyPriceDown > 0 {
+		polySpread = 1.0 - (polyPriceUp + polyPriceDown)
+		if polySpread < 0 {
+			polySpread = -polySpread // 取绝对值
+		}
+	}
+
+	// 构建 Sniper 输入
+	sniperInput := src.SniperInput{
+		CurrentPrice:  currentPrice,
+		StrikePrice:   state.StrikePrice,
+		TimeLeftSec:   timeLeftSec,
+		Sigma:         sigma,
+		PolyPriceUp:   polyPriceUp,
+		PolyPriceDown: polyPriceDown,
+		Last1MinHigh:  high1m,
+		Last1MinLow:   low1m,
+		PolySpread:    polySpread,
+	}
+
+	// 执行 Sniper 决策
+	decision := src.EvaluateSniper(sniperInput, cfg.SniperConfig)
+
+	// ===== DEBUG: 只能日志控制 (避免刷屏) =====
+	// 策略:
+	// 1. 关键时刻 (|Z| > 1.5): 每 120 秒输出一次
+	// 2. 平静时刻: 每 5 分钟 (300秒) 输出一次
+	logInterval := 300 * time.Second
+	if math.Abs(decision.ZScore) > 1.5 {
+		logInterval = 120 * time.Second
+	}
+
+	decisionDebugKey := cfg.ID + "_" + state.Slug
+	patternMarketStatesMu.Lock()
+	lastDecisionDebug, hasDecisionDebug := state.LastPatternCheck[decisionDebugKey+"_debug"]
+	shouldDecisionDebug := !hasDecisionDebug || time.Since(lastDecisionDebug) > logInterval
+	if shouldDecisionDebug {
+		state.LastPatternCheck[decisionDebugKey+"_debug"] = time.Now()
+	}
+	patternMarketStatesMu.Unlock()
+
+	if shouldDecisionDebug {
+		// 计算额外调试信息
+		isLongBreakout, isShortBreakout := src.CheckBreakout(currentPrice, high1m, low1m)
+		theoProb := src.NormalCDF(decision.ZScore)
+		edgeUp := theoProb - polyPriceUp
+		edgeDown := (1 - theoProb) - polyPriceDown
+
+		log.Printf("🔍 [Sniper DEBUG][%s] Market=%s | Phase=%d | TimeLeft=%.0fs",
+			cfg.ID, state.Slug, decision.Phase, timeLeftSec)
+		log.Printf("   ├─ Price: Binance=%.2f | Strike=%.2f | Sigma=%.2f | Z=%.3f (阈值=%.1f)",
+			currentPrice, state.StrikePrice, sigma, decision.ZScore, cfg.SniperConfig.ZScoreEntryThreshold)
+		log.Printf("   ├─ Poly: UP=%.4f | DOWN=%.4f | Spread=%.4f (阈值=%.4f)",
+			polyPriceUp, polyPriceDown, polySpread, cfg.SniperConfig.SpreadMax)
+		log.Printf("   ├─ Edge: UP=%.4f | DOWN=%.4f (阈值=%.4f)",
+			edgeUp, edgeDown, cfg.SniperConfig.EdgeThreshold)
+		log.Printf("   ├─ Breakout: Long=%v | Short=%v | High1m=%.2f | Low1m=%.2f",
+			isLongBreakout, isShortBreakout, high1m, low1m)
+		log.Printf("   └─ Decision: Action=%s | Reason=%s",
+			decision.Action, decision.Reason)
+	}
+
+	// 日志: 阶段和决策 (仅非HOLD时)
+	if decision.Action != "HOLD" {
+		log.Printf("🎯 [Sniper][%s] Phase=%d | Z=%.2f | Prob=%.2f | Edge=%.3f | Action=%s (%s)",
+			cfg.ID, decision.Phase, decision.ZScore, decision.TheoProb, decision.Edge,
+			decision.Action, decision.Reason)
+	}
+
+	// 处理决策结果
+	if decision.Action == "HOLD" {
+		return
+	}
+
+	// 确定买入方向和价格
+	var side string
+	var price float64
+
+	switch decision.Action {
+	case "BUY_UP":
+		side = "UP"
+		price = polyPriceUp
+	case "BUY_DOWN":
+		side = "DOWN"
+		price = polyPriceDown
+	case "SELL_UP", "SELL_DOWN":
+		// 做空逻辑暂不实现 (需要持有对应头寸)
+		log.Printf("⚠️ [Sniper][%s] 做空信号暂不支持: %s", cfg.ID, decision.Action)
+		return
+	case "EXIT":
+		// 退出信号由 sell 逻辑处理
+		return
+	default:
+		return
+	}
+
+	// 检查价格有效性
+	if price <= 0 {
+		return
+	}
+
+	// ===== 冷却期检查 (30秒) =====
+	cooldownKey := cfg.ID + "_" + side
+	if state.LastSellTime != nil {
+		if lastSell, ok := state.LastSellTime[cooldownKey]; ok {
+			if time.Since(lastSell) < 30*time.Second {
+				// 冷却期内，跳过买入
+				return
+			}
+		}
+	}
+
+	// 获取买入数量
+	amount := cfg.GetShareAmount(price)
+	if amount <= 0 {
+		return
+	}
+
+	// 获取 TokenID
+	tokenID, ok := state.SideToTokenID[side]
+	if !ok || tokenID == "" {
+		return
+	}
+
+	// ===== 防止重复下单 =====
+	patternMarketStatesMu.Lock()
+	if state.Positions == nil {
+		state.Positions = make(map[string]*PatternPosition)
+	}
+	if existing, ok := state.Positions[cfg.ID]; ok && existing != nil {
+		patternMarketStatesMu.Unlock()
+		return
+	}
+	// 设置 pending 占位
+	state.Positions[cfg.ID] = &PatternPosition{
+		ConfigID: cfg.ID,
+		Pending:  true,
+	}
+	patternMarketStatesMu.Unlock()
+
+	log.Printf("🎯 [Sniper][%s] 触发买入: 市场=%s | 方向=%s | 价格=%.4f | 原因=%s",
+		cfg.ID, state.Slug, side, price, decision.Reason)
+
+	// 构建指标快照 (简化版)
+	buyIndicators := BuyIndicatorSnapshot{}
+
+	// 执行买入 (复用现有函数)
+	executePatternBuy(state, cfg, side, tokenID, price, amount, "Sniper:"+decision.Reason, buyIndicators)
 }

@@ -2,6 +2,7 @@ package src
 
 import (
 	"math"
+	"time"
 )
 
 // ==================== 形态类型定义 ====================
@@ -109,6 +110,16 @@ type PatternResult struct {
 	ActionSuggestion string  // 操作建议
 	RecommendEntry   string  // 入场推荐
 	Confidence       float64 // 置信度 (0-1)
+}
+
+// PatternState 迟滞回线状态机状态
+type PatternState struct {
+	State      string    // "IDLE" 或 "TRENDING"
+	Direction  string    // "UP" 或 "DOWN" (仅在 TRENDING 时有效)
+	LastScore  float64   // 上次评分 (0-100)
+	EntryTime  time.Time // 进入 TRENDING 的时间
+	EntryPrice float64   // 进入时的价格
+	MarketSlug string    // 关联的市场 Slug (用于检测市场变化)
 }
 
 // ==================== 辅助函数 ====================
@@ -341,6 +352,201 @@ func (r *PatternResult) IsBuyDown() bool {
 // ShouldHold 判断是否应该观望
 func (r *PatternResult) ShouldHold() bool {
 	return r.ActionSuggestion == "【观望】"
+}
+
+// ==================== Hysteresis State Machine ====================
+
+// DetectPatternWithHysteresis 使用迟滞回线机制检测形态
+// 双阈值: 80分入场, 65分退出
+// VWAP 否决: 价格破位立即退出
+func DetectPatternWithHysteresis(
+	input PatternDetectInput,
+	currentState *PatternState,
+	currentPrice float64,
+	vwap float64,
+	marketSlug string, // 市场 Slug (用于追踪状态所属市场)
+) (result PatternResult, newState *PatternState) {
+	// 初始化状态
+	if currentState == nil {
+		currentState = &PatternState{
+			State: "IDLE",
+		}
+	}
+
+	// 1. 计算原始形态和评分
+	basePattern := DetectPattern(input)
+	score := CalculatePatternScore(basePattern)
+
+	// 2. VWAP 否决检查 (仅在 TRENDING 状态且 VWAP 有效时)
+	if currentState.State == "TRENDING" && vwap > 0 {
+		vetoTriggered := false
+
+		// 方向破位检查
+		if currentState.Direction == "UP" && currentPrice < vwap {
+			vetoTriggered = true
+		} else if currentState.Direction == "DOWN" && currentPrice > vwap {
+			vetoTriggered = true
+		}
+
+		if vetoTriggered {
+			// 强制退出到 IDLE
+			newState = &PatternState{
+				State:      "IDLE",
+				LastScore:  score,
+				MarketSlug: marketSlug,
+			}
+
+			// 返回退出信号
+			result = basePattern
+			result.ActionSuggestion = "【观望】"
+			result.RecommendEntry = "❌ VWAP破位退出"
+			return result, newState
+		}
+	}
+
+	// 3. 状态机转换逻辑
+	switch currentState.State {
+	case "IDLE":
+		// IDLE -> TRENDING: 需要 Score >= 80
+		if score >= 80 {
+			direction := ""
+			if basePattern.IsBuyUp() {
+				direction = "UP"
+			} else if basePattern.IsBuyDown() {
+				direction = "DOWN"
+			}
+
+			if direction != "" {
+				// 转换到 TRENDING
+				newState = &PatternState{
+					State:      "TRENDING",
+					Direction:  direction,
+					LastScore:  score,
+					EntryTime:  time.Now(),
+					EntryPrice: currentPrice,
+					MarketSlug: marketSlug,
+				}
+				result = basePattern // 保持原始建议 (买涨/买跌)
+			} else {
+				// 分数够但没有明确方向，保持 IDLE
+				newState = &PatternState{
+					State:      "IDLE",
+					LastScore:  score,
+					MarketSlug: marketSlug,
+				}
+				result = basePattern
+				result.ActionSuggestion = "【观望】"
+				result.RecommendEntry = "❌ 无明确方向"
+			}
+		} else {
+			// 保持 IDLE
+			newState = &PatternState{
+				State:      "IDLE",
+				LastScore:  score,
+				MarketSlug: marketSlug,
+			}
+			result = basePattern
+			result.ActionSuggestion = "【观望】"
+			result.RecommendEntry = "❌ 评分不足 (需要80)"
+		}
+
+	case "TRENDING":
+		// TRENDING -> IDLE: 需要 Score < 65
+		if score < 65 {
+			// 转换到 IDLE
+			newState = &PatternState{
+				State:      "IDLE",
+				LastScore:  score,
+				MarketSlug: marketSlug,
+			}
+			result = basePattern
+			result.ActionSuggestion = "【观望】"
+			result.RecommendEntry = "❌ 动能衰竭退出"
+		} else {
+			// 保持 TRENDING
+			newState = &PatternState{
+				State:      "TRENDING",
+				Direction:  currentState.Direction,
+				LastScore:  score,
+				EntryTime:  currentState.EntryTime,
+				EntryPrice: currentState.EntryPrice,
+				MarketSlug: marketSlug,
+			}
+
+			// 保持原方向的建议
+			result = basePattern
+			if currentState.Direction == "UP" {
+				result.ActionSuggestion = "【买涨】"
+				result.RecommendEntry = "✅ 持有 (趋势中)"
+			} else {
+				result.ActionSuggestion = "【买跌】"
+				result.RecommendEntry = "✅ 持有 (趋势中)"
+			}
+		}
+
+	default:
+		// 未知状态，重置为 IDLE
+		newState = &PatternState{
+			State:      "IDLE",
+			LastScore:  score,
+			MarketSlug: marketSlug,
+		}
+		result = basePattern
+	}
+
+	return result, newState
+}
+
+// CalculatePatternScore 计算形态评分 (0-100)
+// 综合考虑: 形态强度、推荐等级、方向明确性
+func CalculatePatternScore(pattern PatternResult) float64 {
+	// 基础分: 形态强度 (40分)
+	// 强势形态 (火箭、断头等) = 40分
+	// 普通形态 (空中加油等) = 30分
+	// 震荡形态 = 10分
+	patternScore := 10.0
+	switch pattern.SignalType {
+	case "顺势多", "顺势空":
+		patternScore = 40.0 // 顺势信号最强
+	case "反转多", "反转空":
+		patternScore = 30.0 // 反转信号次之
+	case "震荡":
+		patternScore = 10.0 // 震荡最弱
+	}
+
+	// 推荐分 (30分)
+	recommendScore := 0.0
+	switch pattern.RecommendEntry {
+	case "✅ 强烈推荐":
+		recommendScore = 30.0
+	case "✅ 推荐":
+		recommendScore = 20.0
+	case "⚠️ 谨慎":
+		recommendScore = 10.0
+	case "❌ 不推荐":
+		recommendScore = 0.0
+	}
+
+	// 置信度分 (30分)
+	confidenceScore := pattern.Confidence * 30.0
+
+	// 方向明确性加分 (额外 10分)
+	directionBonus := 0.0
+	if pattern.ActionSuggestion == "【买涨】" || pattern.ActionSuggestion == "【买跌】" {
+		directionBonus = 10.0
+	}
+
+	totalScore := patternScore + recommendScore + confidenceScore + directionBonus
+
+	// 限制在 0-100 范围
+	if totalScore > 100 {
+		totalScore = 100
+	}
+	if totalScore < 0 {
+		totalScore = 0
+	}
+
+	return totalScore
 }
 
 // ==================== TrendSurge (单边加速) ====================

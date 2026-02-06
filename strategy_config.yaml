@@ -36,9 +36,9 @@ groups:
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78
     leg1_share_price_3: 0.84          
-    leg1_share_amount_1: 100
-    leg1_share_amount_2: 50
-    leg1_share_amount_3: 25
+    leg1_share_amount_1: 10
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 2
     max_slippage: 0.03                
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          
@@ -58,17 +58,17 @@ groups:
     min_edge_tier_4: 0.01 
 
   - id: "基本3号"
-    min_trend_percent_up: 0.9038    # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
-    min_trend_percent_down: 0.9038  # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
-    trend_window_sec_start: 350   
-    trend_window_sec_end: 530       # 这个增加到590时，差别不大，成功率有略微下降。但是530时，成功率上升了，收益也增加了
+    min_trend_percent_up: 0.0038    # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
+    min_trend_percent_down: 0.0038  # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
+    trend_window_sec_start: 360   
+    trend_window_sec_end: 540       # 这个增加到590时，差别不大，成功率有略微下降。但是530时，成功率上升了，收益也增加了
     leg0_share_price_0: 0.55      
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78      
     leg1_share_price_3: 0.84      
-    leg1_share_amount_1: 100
-    leg1_share_amount_2: 50
-    leg1_share_amount_3: 25
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 30
+    leg1_share_amount_3: 20
     max_slippage: 0.03
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.2      
@@ -96,9 +96,9 @@ groups:
     leg1_share_price_1: 0.69         
     leg1_share_price_2: 0.81          # 这个值压制到0.78，成功率和盈利都下降了
     leg1_share_price_3: 0.86          # 这个值压制到0.84，成功率和盈利都下降了        
-    leg1_share_amount_1: 100         
-    leg1_share_amount_2: 50          
-    leg1_share_amount_3: 25          
+    leg1_share_amount_1: 10         
+    leg1_share_amount_2: 5          
+    leg1_share_amount_3: 2          
     max_slippage: 0.03               
     price_tick_size: 0.01
     sigmoid_sensitivity: 4.5          # 这个降为4后，成功率下降；有测一轮4.2，没有变化；提成4.8，准确率和收益有下降
@@ -126,9 +126,9 @@ groups:
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78
     leg1_share_price_3: 0.84
-    leg1_share_amount_1: 100
-    leg1_share_amount_2: 50
-    leg1_share_amount_3: 25
+    leg1_share_amount_1: 10
+    leg1_share_amount_2: 5
+    leg1_share_amount_3: 2
     scan_interval_sec: 0
     max_slippage: 0.03
     price_tick_size: 0.01

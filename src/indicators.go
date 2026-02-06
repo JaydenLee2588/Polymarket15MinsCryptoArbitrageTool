@@ -395,3 +395,82 @@ func GetVolumes(klines []HistoricalKline) []float64 {
 	}
 	return volumes
 }
+
+// ==================== Sniper v4.4 辅助函数 ====================
+
+// Get1MinHighLow 获取最近1分钟的高低点
+// 用于突破确认判定
+func Get1MinHighLow(klines []HistoricalKline) (high, low float64) {
+	if len(klines) == 0 {
+		return 0, 0
+	}
+
+	// 取最后一根 K 线 (最近1分钟)
+	last := klines[len(klines)-1]
+	return last.High, last.Low
+}
+
+// Get1MinHighLowFromLast2 获取前一根K线的高低点 (排除当前未完成K线)
+// 用于更准确的突破判定
+func Get1MinHighLowFromLast2(klines []HistoricalKline) (high, low float64) {
+	if len(klines) < 2 {
+		if len(klines) == 1 {
+			return klines[0].High, klines[0].Low
+		}
+		return 0, 0
+	}
+
+	// 取倒数第二根 K 线 (已完成的最近1分钟)
+	prev := klines[len(klines)-2]
+	return prev.High, prev.Low
+}
+
+// ComputeRealtimeSigma 计算实时波动率
+// 使用最近 N 根 K 线的收盘价标准差
+func ComputeRealtimeSigma(klines []HistoricalKline, period int) float64 {
+	if len(klines) < period {
+		period = len(klines)
+	}
+	if period == 0 {
+		return 0
+	}
+
+	// 提取最近 period 根 K 线的收盘价
+	closes := make([]float64, period)
+	startIdx := len(klines) - period
+	for i := 0; i < period; i++ {
+		closes[i] = klines[startIdx+i].Close
+	}
+
+	return ComputeStdDev(closes)
+}
+
+// ComputeVolumeAverage 计算平均成交量
+func ComputeVolumeAverage(klines []HistoricalKline, period int) float64 {
+	if len(klines) == 0 {
+		return 0
+	}
+	if period > len(klines) {
+		period = len(klines)
+	}
+
+	var sum float64
+	startIdx := len(klines) - period
+	for i := startIdx; i < len(klines); i++ {
+		sum += klines[i].Volume
+	}
+	return sum / float64(period)
+}
+
+// IsVolumeSpike 检测成交量是否暴增 (事件屏蔽用)
+// 当前成交量 > 平均值 * multiplier 时返回 true
+func IsVolumeSpike(klines []HistoricalKline, period int, multiplier float64) bool {
+	if len(klines) < 2 {
+		return false
+	}
+
+	avg := ComputeVolumeAverage(klines[:len(klines)-1], period) // 排除最后一根
+	lastVol := klines[len(klines)-1].Volume
+
+	return avg > 0 && lastVol > avg*multiplier
+}

@@ -44,6 +44,12 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
+    sniper:
+      zscore_entry_threshold: 3.0
+      zscore_exit_threshold: 1.0
+      spread_max: 0.05
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.06
     symbols:
       - "BTC"
       - "ETH"
@@ -67,6 +73,12 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
+    sniper:
+      zscore_entry_threshold: 3.0
+      zscore_exit_threshold: 1.0
+      spread_max: 0.05
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.06
     symbols:
       - "BTC"
       - "ETH"
@@ -90,6 +102,12 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
+    sniper:
+      zscore_entry_threshold: 3.0
+      zscore_exit_threshold: 1.0
+      spread_max: 0.05
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.06
     symbols:
       - "BTC"
       - "ETH"
@@ -113,6 +131,12 @@ groups:
     sell_threshold: 0.10
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
+    sniper:
+      zscore_entry_threshold: 3.0
+      zscore_exit_threshold: 1.0
+      spread_max: 0.05
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.06
     symbols:
       - "BTC"
       - "ETH"
@@ -120,7 +144,7 @@ groups:
       - "XRP"
 
   - id: "Pattern策略5"
-    trend_window_sec_start: 30
+    trend_window_sec_start: 60
     trend_window_sec_end: 780
     leg0_share_price_0: 0.40
     leg1_share_price_1: 0.50
@@ -136,6 +160,12 @@ groups:
     sell_threshold: 0.25
     enable_stop_loss: false
     stop_loss_minutes_before_close: 1
+    sniper:
+      zscore_entry_threshold: 2.8 # 趋势策略稍激进
+      zscore_exit_threshold: 0.8
+      spread_max: 0.08
+      dead_fish_min_edge: 0.01
+      edge_threshold: 0.05
     symbols:
       - "BTC"
       - "ETH"

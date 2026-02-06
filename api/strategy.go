@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +79,9 @@ var (
 
 	// 策略开关
 	enableMainStrategy bool = true // 默认启用
+
+	// Strike Price 解析正则 (预编译，避免每次调用都编译)
+	strikePriceRegex = regexp.MustCompile(`\$([0-9,]+(?:\.[0-9]+)?)`)
 )
 
 // StartSimulation 启动多配置模拟 (幂等)
@@ -826,7 +830,12 @@ func scanAndSubscribeWithManager(
 				allConfigStates[cfg.ID] = make(map[string]*MarketState)
 			}
 
-			if _, exists := allConfigStates[cfg.ID][market.Slug]; exists {
+			if state, exists := allConfigStates[cfg.ID][market.Slug]; exists {
+				// Retry机制: 如果之前是0，现在获取到了，更新之
+				if state.StrikePrice == 0 && market.StrikePrice > 0 {
+					state.StrikePrice = market.StrikePrice
+					log.Printf("🔨 [StrikePrice修复] 成功更新 %s: %.2f", market.Slug, market.StrikePrice)
+				}
 				continue
 			}
 
@@ -1103,10 +1112,31 @@ func parseStrikePriceFromMarket(m *src.Market) float64 {
 	// 尝试 3: GroupItemTitle (可能包含如 "$76000" 格式)
 	if strikePrice == 0 && m.GroupItemTitle != "" {
 		var price float64
-		if _, err := fmt.Sscanf(strings.ReplaceAll(m.GroupItemTitle, "$", ""), "%f", &price); err == nil && price > 10000 {
+		// 处理 "$76,000" 这种带逗号的格式
+		cleanTitle := strings.ReplaceAll(m.GroupItemTitle, "$", "")
+		cleanTitle = strings.ReplaceAll(cleanTitle, ",", "")
+		if _, err := fmt.Sscanf(cleanTitle, "%f", &price); err == nil && price > 0 {
 			strikePrice = price
 		}
 	}
+
+	// 尝试 4: 从 Description 解析 (正则匹配 "above $95,000" 等)
+	if strikePrice == 0 && m.Description != "" {
+		// 匹配模式: "$95,000", "above 95000", ">95000"
+		// 优先匹配 "$" 后的数字
+		matches := strikePriceRegex.FindStringSubmatch(m.Description)
+		if len(matches) > 1 {
+			raw := strings.ReplaceAll(matches[1], ",", "")
+			if val, err := strconv.ParseFloat(raw, 64); err == nil {
+				strikePrice = val
+			}
+		}
+	}
+
+	// if strikePrice == 0 {
+	// 	log.Printf("⚠️ 无法解析 StrikePrice: Slug=%s | Threshold='%s' | XAxis='%s' | Title='%s'",
+	// 		m.Slug, m.GroupItemThreshold, m.XAxisValue, m.GroupItemTitle)
+	// }
 
 	return strikePrice
 }
@@ -1195,10 +1225,10 @@ func scanNewMarkets(
 				continue
 			}
 
-			// 检查是否已存在
-			if _, exists := existingMarkets[event.Slug]; exists {
-				continue
-			}
+			// 检查是否已存在 (移除检查，以便能更新 Strike Price)
+			// if _, exists := existingMarkets[event.Slug]; exists {
+			// 	continue
+			// }
 
 			// 第二步：获取完整市场详情
 			markets, err := client.GetMarkets(context.Background(), &src.GetMarketsParams{Slug: []string{event.Slug}})
@@ -1265,6 +1295,23 @@ func scanNewMarkets(
 			// 使用辅助函数解析 Strike Price
 			strikePrice := parseStrikePriceFromMarket(m)
 
+			// 如果解析失败，尝试从 Binance 获取历史价格 (Fallback)
+			if strikePrice == 0 {
+				binanceSymbol := src.SymbolToBinance(symbol)
+				if binanceSymbol != "" {
+					restClient := src.NewBinanceRESTClient(nil)
+					kline, err := restClient.FetchKlineAtTime(binanceSymbol, windowStart.Unix())
+					if err == nil && kline != nil {
+						strikePrice = kline.Open
+						log.Printf("✅ [Fallback] 从 Binance 获取 StrikePrice: %s @ %s = $%.2f",
+							binanceSymbol, windowStart.Format("15:04"), strikePrice)
+					} else {
+						log.Printf("❌ [Fallback] Binance 获取失败 (%s @ %s): %v",
+							binanceSymbol, windowStart.Format("15:04"), err)
+					}
+				}
+			}
+
 			market := MarketInfo{
 				Slug:          m.Slug,
 				Symbol:        symbol,
@@ -1276,7 +1323,7 @@ func scanNewMarkets(
 			}
 			newMarkets = append(newMarkets, market)
 
-			log.Printf("📊 发现新市场: %s [%s] 结束于 %s", m.Slug, symbol, windowEnd.Format("15:04"))
+			// log.Printf("📊 发现新市场: %s [%s] 结束于 %s", m.Slug, symbol, windowEnd.Format("15:04"))
 		}
 
 		// 如果搜索没找到，尝试直接构造当前窗口的 slug
@@ -1300,10 +1347,10 @@ func scanNewMarkets(
 			if prefix != "" {
 				slug := fmt.Sprintf("%s-%d", prefix, timestamp)
 
-				// 检查是否已存在
-				if _, exists := existingMarkets[slug]; exists {
-					continue
-				}
+				// 检查是否已存在 (移除检查，以便能更新 Strike Price)
+				// if _, exists := existingMarkets[slug]; exists {
+				// 	continue
+				// }
 
 				markets, err := client.GetMarkets(context.Background(), &src.GetMarketsParams{Slug: []string{slug}})
 				if err == nil && len(markets) > 0 {
@@ -1311,7 +1358,7 @@ func scanNewMarkets(
 					if m.Active && !m.Closed {
 						tokenIDs := []string(m.ClobTokenIDs)
 						if len(tokenIDs) == 2 {
-							log.Printf("📊 通过直接构造发现市场: %s", m.Slug)
+							// log.Printf("📊 通过直接构造发现市场: %s", m.Slug)
 
 							// 动态 Side 映射：根据 Outcomes 文本判断 UP/DOWN (与 FKGoPolyTools 一致)
 							tokenIDToSide := make(map[string]string)
@@ -1351,6 +1398,24 @@ func scanNewMarkets(
 
 							// 使用辅助函数解析 Strike Price
 							strikePrice := parseStrikePriceFromMarket(m)
+
+							// 如果解析失败，尝试从 Binance 获取历史价格 (Fallback)
+							if strikePrice == 0 {
+								binanceSymbol := src.SymbolToBinance(symbol)
+								if binanceSymbol != "" {
+									restClient := src.NewBinanceRESTClient(nil)
+									kline, err := restClient.FetchKlineAtTime(binanceSymbol, currentWindow.Unix())
+									if err == nil && kline != nil {
+										strikePrice = kline.Open
+										// log.Printf("✅ [Fallback] 从 Binance 获取 StrikePrice: %s @ %s = $%.2f",
+										// 	binanceSymbol, currentWindow.Format("15:04"), strikePrice)
+									} else {
+										// 仅在首次失败时记录，或降低日志级别
+										// log.Printf("❌ [Fallback] Binance 获取失败 (%s @ %s): %v",
+										// 	binanceSymbol, currentWindow.Format("15:04"), err)
+									}
+								}
+							}
 
 							market := MarketInfo{
 								Slug:          m.Slug,
@@ -1447,13 +1512,13 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 		// 根据跳过原因进行日志记录 (保持原有日志行为)
 		switch decision.Reason {
 		case "zscore_below_tier0":
-			if time.Since(state.LastEdgeLogTime) > 60*time.Second {
+			if time.Since(state.LastEdgeLogTime) > 30*time.Second {
 				log.Printf("🔍 [%s][%s] 趋势极弱(Z=%.2f < Tier0=%.2f)，跳过",
 					state.ConfigGroup, state.Slug, decision.ZScore, config.Tier0ZScore)
 				state.LastEdgeLogTime = time.Now()
 			}
 		case "edge_insufficient":
-			if time.Since(state.LastEdgeLogTime) > 10*time.Second {
+			if time.Since(state.LastEdgeLogTime) > 30*time.Second {
 				trendPercent := (kline.Close - kline.Open) / kline.Open
 				log.Printf("🔍 [%s][%s] 趋势满足(%s: %.4f%%) 但优势不足: Z=%.2f (Sigmoid价=%.3f), 市场价=%.3f, 优势=%.3f, 剩余%.0f秒",
 					state.ConfigGroup, state.Slug, decision.Side, trendPercent*100,
@@ -1461,8 +1526,11 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 				state.LastEdgeLogTime = time.Now()
 			}
 		case "price_too_low":
-			log.Printf("⚠️ [%s][%s] %s 价格 %.3f 低于阈值 %.2f，跳过",
-				state.ConfigGroup, state.Slug, decision.Side, decision.Price, config.Leg0SharePrice0)
+			if time.Since(state.LastEdgeLogTime) > 60*time.Second {
+				log.Printf("⚠️ [%s][%s] %s 价格 %.3f 低于阈值 %.2f，跳过",
+					state.ConfigGroup, state.Slug, decision.Side, decision.Price, config.Leg0SharePrice0)
+				state.LastEdgeLogTime = time.Now()
+			}
 		case "price_too_high":
 			if !state.Leg1SkippedHighPrice {
 				log.Printf("⏭️ [%s][%s] %s 价格 %.3f 超过阈值 %.2f，跳过",
@@ -1669,6 +1737,18 @@ func checkBinanceArbitrage(state *MarketState, config StrategyConfig) {
 	state.Leg1Amount = filledAmount
 	state.Leg1RecordID = id
 	state.Leg1Time = now
+
+	// 记录交易历史日志 (简化版，只记录核心数据)
+	LogBuyEntry(&TradeLogEntry{
+		BuyTime:         now,
+		ConfigID:        config.ID,
+		MarketSlug:      state.Slug,
+		MarketStartTime: state.StartTime,
+		Side:            targetSide,
+		Amount:          filledAmount,
+		BuyPrice:        filledPrice,
+		TotalCost:       cost,
+	})
 }
 
 // checkPendingResolutions 检查等待决议的交易
@@ -1737,6 +1817,9 @@ func checkPendingResolutions(client *src.Client, pending map[string]*MarketState
 		if err := database.UpdateTradeResolution(state.Leg1RecordID, resolution, pnl); err != nil {
 			log.Printf("❌ 更新决议失败: %v", err)
 		}
+
+		// 记录决议到交易历史日志
+		UpdateResolutionForRedemption(slug, state.ConfigGroup, resolution, pnl)
 
 		// ========== 计划自动赎回 (仅获胜方) ==========
 		redeemerMu.Lock()
@@ -2017,7 +2100,9 @@ func GetMarketInfo() TUIMarketInfo {
 		return TUIMarketInfo{}
 	}
 
-	// 遍历找到 BTC 市场
+	var bestState *MarketState
+
+	// 遍历找到最新的 BTC 市场
 	for _, configStates := range *rtConfigStatesRef {
 		for _, state := range configStates {
 			if state != nil && state.LatestPrices != nil {
@@ -2031,17 +2116,24 @@ func GetMarketInfo() TUIMarketInfo {
 				up := state.LatestPrices["UP"]
 				down := state.LatestPrices["DOWN"]
 				if up > 0 || down > 0 {
-					return TUIMarketInfo{
-						UpPrice:     up,
-						DownPrice:   down,
-						Slug:        state.Slug,
-						Symbol:      state.Symbol,
-						EndTime:     state.EndTime,
-						StrikePrice: state.StrikePrice,
-						HasData:     true,
+					// 寻找 EndTime 最晚的市场 (防止 Map 迭代顺序随机导致跳变)
+					if bestState == nil || state.EndTime.After(bestState.EndTime) {
+						bestState = state
 					}
 				}
 			}
+		}
+	}
+
+	if bestState != nil {
+		return TUIMarketInfo{
+			UpPrice:     bestState.LatestPrices["UP"],
+			DownPrice:   bestState.LatestPrices["DOWN"],
+			Slug:        bestState.Slug,
+			Symbol:      bestState.Symbol,
+			EndTime:     bestState.EndTime,
+			StrikePrice: bestState.StrikePrice,
+			HasData:     true,
 		}
 	}
 	return TUIMarketInfo{}
