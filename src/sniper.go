@@ -144,8 +144,15 @@ func evaluateReversal(input SniperInput, cfg SniperConfig, zScore, theoProb floa
 	isLongBreakout, isShortBreakout := CheckBreakout(input.CurrentPrice, input.Last1MinHigh, input.Last1MinLow)
 
 	// 3. 极值回归逻辑
-	if zScore < -cfg.ZScoreEntryThreshold && isLongBreakout {
-		// Z-Score 极度偏低 (价格远低于行权价) + 向上突破 → 买涨 (反弹)
+	// 3. 极值回归逻辑
+	if zScore < -cfg.ZScoreEntryThreshold {
+		// Z-Score 极度偏低 (价格远低于行权价)
+		if !isLongBreakout {
+			decision.Reason = "no_breakout_confirmation"
+			return decision
+		}
+
+		// 向上突破 → 检查 Edge
 		edge := theoProb - input.PolyPriceUp
 		if edge > cfg.EdgeThreshold {
 			decision.Action = "BUY_UP"
@@ -153,11 +160,22 @@ func evaluateReversal(input SniperInput, cfg SniperConfig, zScore, theoProb floa
 			decision.Edge = edge
 			decision.Reason = "reversal_long_breakout"
 			return decision
+		} else {
+			decision.Reason = "edge_too_low"
+			decision.Edge = edge
+			decision.TargetSide = "UP"
+			return decision
 		}
 	}
 
-	if zScore > cfg.ZScoreEntryThreshold && isShortBreakout {
-		// Z-Score 极度偏高 (价格远高于行权价) + 向下突破 → 买跌 (回落)
+	if zScore > cfg.ZScoreEntryThreshold {
+		// Z-Score 极度偏高 (价格远高于行权价)
+		if !isShortBreakout {
+			decision.Reason = "no_breakout_confirmation"
+			return decision
+		}
+
+		// 向下突破 → 检查 Edge
 		theoDown := 1 - theoProb
 		edge := theoDown - input.PolyPriceDown
 		if edge > cfg.EdgeThreshold {
@@ -166,10 +184,15 @@ func evaluateReversal(input SniperInput, cfg SniperConfig, zScore, theoProb floa
 			decision.Edge = edge
 			decision.Reason = "reversal_short_breakout"
 			return decision
+		} else {
+			decision.Reason = "edge_too_low"
+			decision.Edge = edge
+			decision.TargetSide = "DOWN"
+			return decision
 		}
 	}
 
-	decision.Reason = "no_breakout_confirmation"
+	decision.Reason = "zscore_not_extreme_enough_for_direction" // 理论上前面的 absZ check 已经拦截，但这作为最后兜底
 	return decision
 }
 

@@ -57,7 +57,7 @@ def parse_log_line(line):
         "line": line
     }
 
-def process_log_file(filepath, output_path):
+def process_log_file(filepath, output_path, price_interval=0.05):
     if not os.path.exists(filepath):
         print(f"File not found: {filepath}")
         return
@@ -67,7 +67,7 @@ def process_log_file(filepath, output_path):
     
     # 统计数据
     strategy_stats = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl": 0.0, "resolutions": 0, "sells": 0})
-    price_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0}))  # strategy -> price_bucket -> stats
+    price_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0}))  # strategy -> price_bucket -> stats
     time_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0}))   # strategy -> time_bucket -> stats
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -120,9 +120,11 @@ def process_log_file(filepath, output_path):
                     
                     # 价格聚合 (0.05为一个桶)
                     if entry_price > 0:
-                        price_bucket = round(entry_price / 0.05) * 0.05
+                        price_bucket = round(entry_price / price_interval) * price_interval
                         price_agg[strat][price_bucket]["count"] += 1
                         price_agg[strat][price_bucket]["pnl"] += pnl
+                        if pnl > 0:
+                            price_agg[strat][price_bucket]["wins"] += 1
                     
                     del open_trades[(strat, mkt)]
 
@@ -165,8 +167,8 @@ def process_log_file(filepath, output_path):
     
     for strat in all_strats:
         report.append(f"### {strat}\n")
-        report.append("| 价格区间 | 交易次数 | 累计PnL |")
-        report.append("| :---: | :---: | :---: |")
+        report.append("| 价格区间 | 交易次数 | 胜率 | 累计PnL |")
+        report.append("| :---: | :---: | :---: | :---: |")
         
         buckets = sorted(price_agg[strat].keys())
         strat_total_count = 0
@@ -175,13 +177,16 @@ def process_log_file(filepath, output_path):
         for b in buckets:
             count = price_agg[strat][b]["count"]
             pnl = price_agg[strat][b]["pnl"]
+            wins = price_agg[strat][b]["wins"]
+            win_rate = (wins / count * 100) if count > 0 else 0
+            
             strat_total_count += count
             strat_total_pnl += pnl
             pnl_str = f"${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
-            report.append(f"| {b:.2f} - {b+0.05:.2f} | {count} | {pnl_str} |")
+            report.append(f"| {b:.2f} - {b+price_interval:.2f} | {count} | {win_rate:.1f}% | {pnl_str} |")
         
         strat_total_pnl_str = f"${strat_total_pnl:.2f}" if strat_total_pnl >= 0 else f"-${abs(strat_total_pnl):.2f}"
-        report.append(f"| **合计** | **{strat_total_count}** | **{strat_total_pnl_str}** |")
+        report.append(f"| **合计** | **{strat_total_count}** | - | **{strat_total_pnl_str}** |")
         report.append("")
     
     # 3. 按时间聚合 (10秒粒度)
@@ -237,5 +242,6 @@ if __name__ == "__main__":
     else:
         log_file = sys.argv[1]
         output_file = sys.argv[2]
+        price_interval = float(sys.argv[3]) if len(sys.argv) > 3 else 0.05
         
-    process_log_file(log_file, output_file)
+    process_log_file(log_file, output_file, price_interval)

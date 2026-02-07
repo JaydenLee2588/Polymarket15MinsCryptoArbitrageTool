@@ -834,7 +834,7 @@ func scanAndSubscribeWithManager(
 				// Retry机制: 如果之前是0，现在获取到了，更新之
 				if state.StrikePrice == 0 && market.StrikePrice > 0 {
 					state.StrikePrice = market.StrikePrice
-					log.Printf("🔨 [StrikePrice修复] 成功更新 %s: %.2f", market.Slug, market.StrikePrice)
+					// log.Printf("🔨 [StrikePrice修复] 成功更新 %s: %.2f", market.Slug, market.StrikePrice)
 				}
 				continue
 			}
@@ -1303,8 +1303,10 @@ func scanNewMarkets(
 					kline, err := restClient.FetchKlineAtTime(binanceSymbol, windowStart.Unix())
 					if err == nil && kline != nil {
 						strikePrice = kline.Open
-						log.Printf("✅ [Fallback] 从 Binance 获取 StrikePrice: %s @ %s = $%.2f",
-							binanceSymbol, windowStart.Format("15:04"), strikePrice)
+						if _, exists := existingMarkets[m.Slug]; !exists {
+							log.Printf("✅ [Fallback] 从 Binance 获取 StrikePrice: %s @ %s = $%.2f",
+								binanceSymbol, windowStart.Format("15:04"), strikePrice)
+						}
 					} else {
 						log.Printf("❌ [Fallback] Binance 获取失败 (%s @ %s): %v",
 							binanceSymbol, windowStart.Format("15:04"), err)

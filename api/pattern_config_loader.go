@@ -90,12 +90,12 @@ type patternConfigGroupYAML struct {
 }
 
 type SniperConfigYAML struct {
-	ZScoreEntryThreshold float64 `yaml:"zscore_entry_threshold"`
-	ZScoreExitThreshold  float64 `yaml:"zscore_exit_threshold"`
-	ProfitExitPct        float64 `yaml:"profit_exit_pct"`
-	SpreadMax            float64 `yaml:"spread_max"`
-	DeadFishMinEdge      float64 `yaml:"dead_fish_min_edge"`
-	EdgeThreshold        float64 `yaml:"edge_threshold"`
+	ZScoreEntryThreshold *float64 `yaml:"zscore_entry_threshold"`
+	ZScoreExitThreshold  *float64 `yaml:"zscore_exit_threshold"`
+	ProfitExitPct        *float64 `yaml:"profit_exit_pct"`
+	SpreadMax            *float64 `yaml:"spread_max"`
+	DeadFishMinEdge      *float64 `yaml:"dead_fish_min_edge"`
+	EdgeThreshold        *float64 `yaml:"edge_threshold"`
 }
 
 type patternConfigFileYAML struct {
@@ -273,24 +273,24 @@ func loadSniperConfig(yamlCfg *SniperConfigYAML) src.SniperConfig {
 		return cfg
 	}
 
-	// 覆盖非零值
-	if yamlCfg.ZScoreEntryThreshold > 0 {
-		cfg.ZScoreEntryThreshold = yamlCfg.ZScoreEntryThreshold
+	// 覆盖非空值 (支持 0)
+	if yamlCfg.ZScoreEntryThreshold != nil {
+		cfg.ZScoreEntryThreshold = *yamlCfg.ZScoreEntryThreshold
 	}
-	if yamlCfg.ZScoreExitThreshold > 0 {
-		cfg.ZScoreExitThreshold = yamlCfg.ZScoreExitThreshold
+	if yamlCfg.ZScoreExitThreshold != nil {
+		cfg.ZScoreExitThreshold = *yamlCfg.ZScoreExitThreshold
 	}
-	if yamlCfg.ProfitExitPct > 0 {
-		cfg.ProfitExitPct = yamlCfg.ProfitExitPct
+	if yamlCfg.ProfitExitPct != nil {
+		cfg.ProfitExitPct = *yamlCfg.ProfitExitPct
 	}
-	if yamlCfg.SpreadMax > 0 {
-		cfg.SpreadMax = yamlCfg.SpreadMax
+	if yamlCfg.SpreadMax != nil {
+		cfg.SpreadMax = *yamlCfg.SpreadMax
 	}
-	if yamlCfg.DeadFishMinEdge > 0 {
-		cfg.DeadFishMinEdge = yamlCfg.DeadFishMinEdge
+	if yamlCfg.DeadFishMinEdge != nil {
+		cfg.DeadFishMinEdge = *yamlCfg.DeadFishMinEdge
 	}
-	if yamlCfg.EdgeThreshold > 0 {
-		cfg.EdgeThreshold = yamlCfg.EdgeThreshold
+	if yamlCfg.EdgeThreshold != nil {
+		cfg.EdgeThreshold = *yamlCfg.EdgeThreshold
 	}
 
 	return cfg

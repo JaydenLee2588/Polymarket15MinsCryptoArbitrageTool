@@ -250,3 +250,82 @@ pattern_strategy:
     spread_max: 0.05
     dead_fish_min_edge: 0.02
 ```
+
+---
+
+## 15. Sniper 策略深度解析 (v4.4 补充)
+
+### 15.1 策略执行全流程 (Decision Flow)
+
+Sniper 策略根据**剩余时间**分为三个阶段，每个阶段有不同的触发逻辑。
+
+```mermaid
+graph TD
+    Start[开始: 收到 K线 & 价格更新] --> CheckPhase{剩余时间 TimeLeft?}
+    
+    CheckPhase -->|大于 3分钟| Phase1[Phase 1 & 2: 极值回归]
+    CheckPhase -->|30秒 - 3分钟| Phase3[Phase 3: 分歧套利]
+    CheckPhase -->|小于 30秒| Phase4[Phase 4: 死鱼收割]
+
+    %% Phase 1: 极值回归 (反转策略)
+    Phase1 --> CalcZ[计算 Z-Score]
+    CalcZ --> CheckExtreme{Z绝对值 > EntryThreshold?}
+    CheckExtreme --否--> Hold1[HOLD: Z-Score 未达极值]
+    CheckExtreme --是--> CheckBreakout{是否突破1分钟高/低点?}
+    CheckBreakout --否--> Hold2[HOLD: 无突破确认]
+    CheckBreakout --是--> CalcEdge1[计算 Edge (理论胜率 - 赔率)]
+    CalcEdge1 --> CheckEdge1{Edge > EdgeThreshold?}
+    CheckEdge1 --是--> Fire1[🔥 触发交易: 极值反转]
+    CheckEdge1 --否--> Hold3[HOLD: 优势不足]
+
+    %% Phase 3: 分歧套利 (寻找定价错误)
+    Phase3 --> CalcProb[计算理论胜率 TheoProb]
+    CalcProb --> CalcEdge3[计算 Edge]
+    CalcEdge3 --> CheckEdge3{Edge > EdgeThreshold?}
+    CheckEdge3 --是--> Fire3[🔥 触发交易: 分歧套利]
+    CheckEdge3 --否--> CheckShort{是否可做空?}
+    CheckShort --是--> Fire3Short[🔥 触发交易: 做空高估]
+    CheckShort --否--> Hold4[HOLD: 无套利机会]
+
+    %% Phase 4: 死鱼收割 (确定性捡漏)
+    Phase4 --> CheckCertainty{胜率极高(>95%) 但 价格未归位?}
+    CheckCertainty --是--> Fire4[🔥 触发交易: 死鱼收割]
+    CheckCertainty --否--> Hold5[HOLD: 无死鱼]
+```
+
+### 15.2 关键调优参数 (Gatekeepers)
+
+Sniper 策略的触发频率受以下三个核心参数控制，调整建议如下：
+
+| 参数 | 逻辑 | 默认值 | 现象 | 建议调整 (温和) | 建议调整 (激进) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Z-Score 门槛** | `Abs(Z-Score) > Thresh` | **3.0** | 极难触发 (99.8%) | **2.0** | **1.5** |
+| **突破确认** | 价格突破 1 分钟 High/Low | 硬逻辑 | 震荡市难触发 | 配合低 Z-Score | 配合低 Z-Score |
+| **Edge 门槛** | `TheoProb - MarketPrice` | **0.06** | 要求 6% 利润 | **0.03** | **0.015** |
+
+### 15.3 建议配置方案
+
+#### 方案 A: 温和激活 (推荐)
+降低 Entry 门槛，保持一定利润要求，适合日常运行。
+```yaml
+sniper_config:
+  zscore_entry_threshold: 2.0  # 原 3.0 -> 降低
+  edge_threshold: 0.03         # 原 0.06 -> 减半
+  spread_max: 0.08             # 放宽价差容忍度
+```
+
+#### 方案 B: 激进测试
+只要有微小机会就上，适合波动率极低的市场。
+```yaml
+sniper_config:
+  zscore_entry_threshold: 1.5  # 极低门槛
+  edge_threshold: 0.015        # 只要有一点点优势就做
+  spread_max: 0.10
+```
+
+#### 方案 C: 死鱼专用 (Phase 4)
+主要想抓最后30秒的捡漏机会。
+```yaml
+sniper_config:
+  dead_fish_min_edge: 0.01     # 只要有1%空间就捡
+```

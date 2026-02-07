@@ -102,6 +102,9 @@ func EvaluateStrategy(input StrategyInput, config StrategyConfig) StrategyDecisi
 		}
 	}
 
+	// [FIX] 无论后续是否 SKIP，都记录获取到的价格，避免日志显示 0.000
+	result.Price = price
+
 	// 5. Calculate Z-Score and Fair Price using Sigmoid model
 	volatility := GetVolatilityFactor(input.Symbol, config)
 	sensitivity := config.SigmoidSensitivity

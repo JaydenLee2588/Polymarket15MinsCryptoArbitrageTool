@@ -37,12 +37,6 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
-    sniper:
-      zscore_entry_threshold: 1.5  # 激进调整: 从 2.0 降到 1.5 (响应用户请求)
-      zscore_exit_threshold: 1.0
-      spread_max: 0.05
-      dead_fish_min_edge: 0.02
-      edge_threshold: 0.03  # 放宽: 从 0.06 降到 0.03
     symbols:
       - "BTC"
       - "ETH"
@@ -66,12 +60,6 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
-    sniper:
-      zscore_entry_threshold: 1.5  # 激进调整: 从 2.0 降到 1.5
-      zscore_exit_threshold: 1.0
-      spread_max: 0.05
-      dead_fish_min_edge: 0.02
-      edge_threshold: 0.03  # 放宽: 从 0.06 降到 0.03
     symbols:
       - "BTC"
       - "ETH"
@@ -95,12 +83,6 @@ groups:
     sell_threshold: 0.10
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
-    sniper:
-      zscore_entry_threshold: 1.5  # 激进调整: 从 2.0 降到 1.5
-      zscore_exit_threshold: 1.0
-      spread_max: 0.05
-      dead_fish_min_edge: 0.02
-      edge_threshold: 0.03  # 放宽: 从 0.06 降到 0.03
     symbols:
       - "BTC"
       - "ETH"
@@ -124,12 +106,6 @@ groups:
     sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
-    sniper:
-      zscore_entry_threshold: 1.5  # 激进调整: 从 2.0 降到 1.5
-      zscore_exit_threshold: 1.0
-      spread_max: 0.05
-      dead_fish_min_edge: 0.02
-      edge_threshold: 0.03  # 放宽: 从 0.06 降到 0.03
     symbols:
       - "BTC"
       - "ETH"
@@ -153,14 +129,85 @@ groups:
     sell_threshold: 0.20
     enable_stop_loss: false
     stop_loss_minutes_before_close: 1
-    sniper:
-      zscore_entry_threshold: 1.3  # 激进调整: 从 1.8 降到 1.3
-      zscore_exit_threshold: 0.8
-      spread_max: 0.08
-      dead_fish_min_edge: 0.01
-      edge_threshold: 0.03  # 放宽: 从 0.05 降到 0.03
     symbols:
       - "BTC"
       - "ETH"
       - "SOL"
       - "XRP"
+
+  # ==============================================================================
+  # Sniper 策略特化组 (基于 sniper_analysis.md 建议)
+  # ==============================================================================
+
+  - id: "Sniper-A-温和"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 600
+    # 基础参数 (仅占位，Sniper主要看 sniper_config)
+    leg0_share_price_0: 0.10
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.90
+    leg1_share_amount_1: 5
+    leg1_share_amount_2: 3
+    leg1_share_amount_3: 2
+    max_slippage: 0.05
+    patterns: [] # 纯 Sniper 模式
+    sell_threshold: 0.10
+    enable_stop_loss: true
+    stop_loss_minutes_before_close: 2
+    sniper:
+      zscore_entry_threshold: 2.0  # 温和门槛
+      zscore_exit_threshold: 1.0
+      profit_exit_pct: 5.0
+      spread_max: 0.08             # 放宽价差
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.03         # 优势门槛减半
+    symbols: ["BTC", "ETH", "SOL", "XRP"]
+
+  - id: "Sniper-B-激进"
+    trend_window_sec_start: 30
+    trend_window_sec_end: 600
+    leg0_share_price_0: 0.10
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.80
+    leg1_share_price_3: 0.90
+    leg1_share_amount_1: 3  # 小额试错
+    leg1_share_amount_2: 2
+    leg1_share_amount_3: 1
+    max_slippage: 0.10      # 容忍大滑点
+    patterns: []
+    sell_threshold: 0.08    # 快速止盈
+    enable_stop_loss: true
+    stop_loss_minutes_before_close: 1
+    sniper:
+      zscore_entry_threshold: 1.5  # 极低门槛，几乎必触发
+      zscore_exit_threshold: 0.5
+      profit_exit_pct: 3.0
+      spread_max: 0.10
+      dead_fish_min_edge: 0.02
+      edge_threshold: 0.015        # 微利即冲
+    symbols: ["BTC", "ETH", "SOL", "XRP"]
+
+  - id: "Sniper-C-死鱼"
+    trend_window_sec_start: 150 # 只关注后半段
+    trend_window_sec_end: 900
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.99
+    leg1_share_price_2: 0.99
+    leg1_share_price_3: 0.99
+    leg1_share_amount_1: 10 # 大额捡漏
+    leg1_share_amount_2: 10
+    leg1_share_amount_3: 10
+    max_slippage: 0.05
+    patterns: []
+    sell_threshold: 0.05
+    enable_stop_loss: false
+    stop_loss_minutes_before_close: 0
+    sniper:
+      zscore_entry_threshold: 3.0  # 不关注 Z
+      zscore_exit_threshold: 0.0
+      profit_exit_pct: 2.0
+      spread_max: 0.05
+      dead_fish_min_edge: 0.01     # 1% 空间就捡
+      edge_threshold: 0.05
+    symbols: ["BTC", "ETH", "SOL", "XRP"]

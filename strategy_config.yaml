@@ -28,17 +28,17 @@
 
 groups:
   - id: "基本2号"
-    min_trend_percent_up: 0.9026      # 这个降成0.18会输很惨，从0.2提到0.26，胜率微降，收益增加
-    min_trend_percent_down: 0.9026    # 这个降成0.18会输很惨，从0.22提到0.26，胜率微降，收益增加
+    min_trend_percent_up: 0.0026      # 这个降成0.18会输很惨，从0.2提到0.26，胜率微降，收益增加
+    min_trend_percent_down: 0.0026    # 这个降成0.18会输很惨，从0.22提到0.26，胜率微降，收益增加
     trend_window_sec_start: 320
     trend_window_sec_end: 480   # 似乎7分20秒未到尽头，赚的很多。         
-    leg0_share_price_0: 0.62          
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.84          
-    leg1_share_amount_1: 10
-    leg1_share_amount_2: 5
-    leg1_share_amount_3: 2
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.20
+    leg1_share_price_2: 0.35
+    leg1_share_price_3: 0.45
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 30
+    leg1_share_amount_3: 20
     max_slippage: 0.03                
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          
@@ -60,12 +60,12 @@ groups:
   - id: "基本3号"
     min_trend_percent_up: 0.0038    # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
     min_trend_percent_down: 0.0038  # 很违反直觉，这个提成4之后，反而成功率下降了；0.38收益增加了
-    trend_window_sec_start: 360   
-    trend_window_sec_end: 540       # 这个增加到590时，差别不大，成功率有略微下降。但是530时，成功率上升了，收益也增加了
-    leg0_share_price_0: 0.55      
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78      
-    leg1_share_price_3: 0.84      
+    trend_window_sec_start: 360     # 这俩时间被精算过
+    trend_window_sec_end: 530       # 这个增加到590时，差别不大，成功率有略微下降。但是530时，成功率上升了，收益也增加了。这俩时间被精算过
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.20
+    leg1_share_price_2: 0.35
+    leg1_share_price_3: 0.45
     leg1_share_amount_1: 50
     leg1_share_amount_2: 30
     leg1_share_amount_3: 20
@@ -88,17 +88,17 @@ groups:
     min_edge_tier_4: 0.00
 
   - id: "仿AI测试参数3"
-    min_trend_percent_up: 0.9038       # 很违反直觉，0.0045之后，反而成功率下降了；又测一轮，0.45准确率和收益有增加；0.37准确率下降一点，收益增加
-    min_trend_percent_down: 0.9038     # 很违反直觉，0.0045之后，反而成功率下降了；又测一轮，0.45准确率和收益有增加；0.37准确率下降一点，收益增加
+    min_trend_percent_up: 0.0038       # 很违反直觉，0.0045之后，反而成功率下降了；又测一轮，0.45准确率和收益有增加；0.37准确率下降一点，收益增加
+    min_trend_percent_down: 0.0038     # 很违反直觉，0.0045之后，反而成功率下降了；又测一轮，0.45准确率和收益有增加；0.37准确率下降一点，收益增加
     trend_window_sec_start: 330       # 扩大到300，成功率下降
     trend_window_sec_end: 460         # 扩大到780，成功率下降；延长到600，没有任何变化；480之后亏损增加
-    leg0_share_price_0: 0.10         
-    leg1_share_price_1: 0.69         
-    leg1_share_price_2: 0.81          # 这个值压制到0.78，成功率和盈利都下降了
-    leg1_share_price_3: 0.86          # 这个值压制到0.84，成功率和盈利都下降了        
-    leg1_share_amount_1: 10         
-    leg1_share_amount_2: 5          
-    leg1_share_amount_3: 2          
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.20
+    leg1_share_price_2: 0.35
+    leg1_share_price_3: 0.45
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 30
+    leg1_share_amount_3: 20         
     max_slippage: 0.03               
     price_tick_size: 0.01
     sigmoid_sensitivity: 4.5          # 这个降为4后，成功率下降；有测一轮4.2，没有变化；提成4.8，准确率和收益有下降
@@ -118,17 +118,17 @@ groups:
     min_edge_tier_4: -0.50
 
   - id: "仿AI测试参数2"
-    min_trend_percent_up: 0.904       
-    min_trend_percent_down: 0.904
+    min_trend_percent_up: 0.004       
+    min_trend_percent_down: 0.004
     trend_window_sec_start: 305     # 330之前似乎有赚
     trend_window_sec_end: 390       # 390之后亏损增加         
     leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.84
-    leg1_share_amount_1: 10
-    leg1_share_amount_2: 5
-    leg1_share_amount_3: 2
+    leg1_share_price_1: 0.20
+    leg1_share_price_2: 0.35
+    leg1_share_price_3: 0.45
+    leg1_share_amount_1: 50
+    leg1_share_amount_2: 30
+    leg1_share_amount_3: 20
     scan_interval_sec: 0
     max_slippage: 0.03
     price_tick_size: 0.01

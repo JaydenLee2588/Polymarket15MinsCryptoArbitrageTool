@@ -850,8 +850,11 @@ func checkPatternSellCondition(state *PatternMarketState, pos *PatternPosition, 
 				closes := src.GetCloses(klines)
 				binancePrice := closes[len(closes)-1]
 				sigma := src.ComputeRealtimeSigma(klines, 10)
-				if sigma < 1 {
-					sigma = 50
+
+				// 动态保底: 避免 Sigma 过小导致 Z-Score 爆炸，但也避免使用硬编码的 50 (原逻辑错误)
+				minSigma := binancePrice * 0.001 // 0.1% 的价格作为最小波动率
+				if sigma < minSigma {
+					sigma = minSigma
 				}
 
 				// 计算 Z-Score
@@ -1294,7 +1297,45 @@ func checkPatternPositionExpiry() {
 			// 7. 记录交易历史日志 (决议赎回)
 			UpdateResolutionForRedemption(t.MarketSlug, t.ConfigID, resolution, pnl)
 
-			// 8. 清除持仓
+			// 8. 计划自动赎回 (仅获胜方)
+			redeemerMu.Lock()
+			red := redeemer
+			redeemerMu.Unlock()
+
+			if red != nil && resolution == t.Position.Side {
+				// 获取 conditionId
+				conditionID := market.ConditionID
+
+				// 查找获胜 TokenID
+				winningTokenID := ""
+				for tid, side := range t.State.TokenIDToSide {
+					if side == resolution {
+						winningTokenID = tid
+						break
+					}
+				}
+
+				if conditionID != "" && winningTokenID != "" {
+					// 获取用户地址和代理钱包地址
+					clobClientMu.Lock()
+					signerAddr := ""
+					proxyAddr := ""
+					if clobOrderClient != nil {
+						signerAddr = clobOrderClient.GetSignerAddress()
+						proxyAddr = clobOrderClient.GetAddress()
+					}
+					clobClientMu.Unlock()
+
+					if signerAddr != "" && proxyAddr != "" {
+						// 15分钟加密货币市场通常不是 NegRisk 市场
+						isNegRisk := false
+						log.Printf("💰 [Pattern][%s] 计划自动赎回: %s (Condition: %s)", t.MarketSlug, resolution, conditionID)
+						red.ScheduleRedemption(t.MarketSlug, conditionID, winningTokenID, signerAddr, proxyAddr, t.Position.Amount, true, isNegRisk, t.ConfigID)
+					}
+				}
+			}
+
+			// 9. 清除持仓
 			patternMarketStatesMu.Lock()
 			delete(t.State.Positions, t.ConfigID)
 			patternMarketStatesMu.Unlock()
@@ -1517,26 +1558,26 @@ func checkSniperBuySignal(state *PatternMarketState, cfg PatternStrategyConfig, 
 		edgeUp := theoProb - polyPriceUp
 		edgeDown := (1 - theoProb) - polyPriceDown
 
-		log.Printf("🔍 [Sniper DEBUG][%s] Market=%s | Phase=%d | TimeLeft=%.0fs",
+		log.Printf("🔍 [Sniper 调试][%s] 市场=%s | 阶段=%d | 剩余时间=%.0fs",
 			cfg.ID, state.Slug, decision.Phase, timeLeftSec)
-		log.Printf("   ├─ Price: Binance=%.2f | Strike=%.2f | Sigma=%.2f | Z=%.3f (阈值=%.1f)",
+		log.Printf("   ├─ 价格: 币安=%.2f | 行权价=%.2f | 波动率=%.2f | Z值=%.3f (阈值=%.1f)",
 			currentPrice, state.StrikePrice, sigma, decision.ZScore, cfg.SniperConfig.ZScoreEntryThreshold)
-		log.Printf("   ├─ Poly: UP=%.4f | DOWN=%.4f | Spread=%.4f (阈值=%.4f)",
+		log.Printf("   ├─ Poly: 上涨=%.4f | 下跌=%.4f | 价差=%.4f (阈值=%.4f)",
 			polyPriceUp, polyPriceDown, polySpread, cfg.SniperConfig.SpreadMax)
-		log.Printf("   ├─ Edge: UP=%.4f | DOWN=%.4f (阈值=%.4f)",
+		log.Printf("   ├─ 优势(Edge): 看涨=%.4f | 看跌=%.4f (阈值=%.4f)",
 			edgeUp, edgeDown, cfg.SniperConfig.EdgeThreshold)
-		log.Printf("   ├─ Breakout: Long=%v | Short=%v | High1m=%.2f | Low1m=%.2f",
+		log.Printf("   ├─ 突破: 看涨突破=%v | 看跌突破=%v | 1分高点=%.2f | 1分低点=%.2f",
 			isLongBreakout, isShortBreakout, high1m, low1m)
-		log.Printf("   └─ Decision: Action=%s | Reason=%s",
+		log.Printf("   └─ 决策: 动作=%s | 原因=%s",
 			decision.Action, decision.Reason)
 	}
 
-	// 日志: 阶段和决策 (仅非HOLD时)
-	if decision.Action != "HOLD" {
-		log.Printf("🎯 [Sniper][%s] Phase=%d | Z=%.2f | Prob=%.2f | Edge=%.3f | Action=%s (%s)",
-			cfg.ID, decision.Phase, decision.ZScore, decision.TheoProb, decision.Edge,
-			decision.Action, decision.Reason)
-	}
+	// 日志: 阶段和决策 (仅非HOLD时) - 暂时注释掉以减少刷屏，只由下单逻辑打印
+	// if decision.Action != "HOLD" {
+	// 	log.Printf("🎯 [Sniper][%s] Phase=%d | Z=%.2f | Prob=%.2f | Edge=%.3f | Action=%s (%s)",
+	// 		cfg.ID, decision.Phase, decision.ZScore, decision.TheoProb, decision.Edge,
+	// 		decision.Action, decision.Reason)
+	// }
 
 	// 处理决策结果
 	if decision.Action == "HOLD" {
