@@ -21,20 +21,21 @@
 # 审核优化建议：
 #  根据 logs 里的今日log文件进行下列操作（请参考scripts里的脚本文件）：
 #  1.分策略，计算每种策略的 次数，总PnL，胜率，决议和出售比例 ；
-#  2.分策略，按照下单价格进行一下聚合；
-#  3.分策略，按照下单时间进行一下聚合；
-#  4.分策略，对比配置文件，分析哪儿参数建议考虑调整。
+#  2.分策略，按照下单价格进行一下聚合(粒度以0.02美元为组)；
+#  3.分策略，按照距离15分钟市场开启后的下单时间进行一下聚合(粒度以30秒为组)；
+#  4.分策略，按照实际下单的UTC-5时间进行一下聚合PnL和胜率(粒度以30分钟为组，注意，LOG中不是UTC-5时间，我需要以UTC-5时间显示到md文档)；
+#  5.分策略，对比配置文件，分析哪儿参数建议考虑调整。
 # 将整理后的文档，放到 logs 的今日文件夹下，并命名为 strategy_analysis_HHMM.md (HHMM是分析的LOG文件名的时间)
 # ==============================================================================
 
 groups:
   - id: "Pattern策略1"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
     leg1_share_price_2: 0.75
-    leg1_share_price_3: 0.84
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -53,11 +54,11 @@ groups:
 
   - id: "Pattern策略2"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
     leg1_share_price_2: 0.75
-    leg1_share_price_3: 0.84
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -76,11 +77,11 @@ groups:
 
   - id: "Pattern策略3"
     trend_window_sec_start: 30
-    trend_window_sec_end: 560
-    leg0_share_price_0: 0.40
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.70
-    leg1_share_price_3: 0.84
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -88,7 +89,7 @@ groups:
     patterns:
       - "极度超卖"
       - "情绪高潮"
-    sell_threshold: 0.10
+    sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
     symbols:
@@ -99,11 +100,11 @@ groups:
 
   - id: "Pattern策略4"
     trend_window_sec_start: 30
-    trend_window_sec_end: 560
-    leg0_share_price_0: 0.40
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.70
-    leg1_share_price_3: 0.84
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -122,19 +123,19 @@ groups:
 
   - id: "Pattern策略5"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
-    leg0_share_price_0: 0.50
-    leg1_share_price_1: 0.65
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.85
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
-    max_slippage: 0.05
+    max_slippage: 0.03
     patterns:
       - "单边上涨"
       - "单边下跌"
-    sell_threshold: 0.20
+    sell_threshold: 0.15
     enable_stop_loss: false
     stop_loss_minutes_before_close: 1
     symbols:
@@ -143,14 +144,13 @@ groups:
       - "SOL"
       - "XRP"
 
-
   - id: "Pattern策略1+Sniper"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
     leg1_share_price_2: 0.75
-    leg1_share_price_3: 0.84
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -175,11 +175,11 @@ groups:
 
   - id: "Pattern策略2+Sniper"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
     leg1_share_price_2: 0.75
-    leg1_share_price_3: 0.84
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -204,11 +204,11 @@ groups:
 
   - id: "Pattern策略3+Sniper"
     trend_window_sec_start: 30
-    trend_window_sec_end: 560
-    leg0_share_price_0: 0.40
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.70
-    leg1_share_price_3: 0.84
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -216,7 +216,7 @@ groups:
     patterns:
       - "极度超卖"
       - "情绪高潮"
-    sell_threshold: 0.10
+    sell_threshold: 0.15
     enable_stop_loss: true
     stop_loss_minutes_before_close: 3
     sniper:
@@ -233,11 +233,11 @@ groups:
 
   - id: "Pattern策略4+Sniper"
     trend_window_sec_start: 30
-    trend_window_sec_end: 560
-    leg0_share_price_0: 0.40
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.70
-    leg1_share_price_3: 0.84
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
@@ -262,19 +262,19 @@ groups:
 
   - id: "Pattern策略5+Sniper"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
-    leg0_share_price_0: 0.50
-    leg1_share_price_1: 0.65
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.85
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
-    max_slippage: 0.05
+    max_slippage: 0.03
     patterns:
       - "单边上涨"
       - "单边下跌"
-    sell_threshold: 0.20
+    sell_threshold: 0.15
     enable_stop_loss: false
     stop_loss_minutes_before_close: 1
     sniper:
@@ -291,16 +291,15 @@ groups:
 
   - id: "Sniper-A-温和"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
-    # 基础参数 (仅占位，Sniper主要看 sniper_config)
-    leg0_share_price_0: 0.10
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.80
-    leg1_share_price_3: 0.90
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
     leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
-    max_slippage: 0.05
+    max_slippage: 0.03
     patterns: [] # 纯 Sniper 模式
     sell_threshold: 0.10
     enable_stop_loss: true
@@ -316,15 +315,15 @@ groups:
 
   - id: "Sniper-B-激进"
     trend_window_sec_start: 30
-    trend_window_sec_end: 600
-    leg0_share_price_0: 0.10
+    trend_window_sec_end: 780
+    leg0_share_price_0: 0.01
     leg1_share_price_1: 0.50
-    leg1_share_price_2: 0.80
-    leg1_share_price_3: 0.90
-    leg1_share_amount_1: 7  # 小额试错
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
+    leg1_share_amount_1: 7
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
-    max_slippage: 0.10      # 容忍大滑点
+    max_slippage: 0.03
     patterns: []
     sell_threshold: 0.08    # 快速止盈
     enable_stop_loss: true
@@ -339,16 +338,16 @@ groups:
     symbols: ["BTC", "ETH", "SOL", "XRP"]
 
   - id: "Sniper-C-死鱼"
-    trend_window_sec_start: 150 # 只关注后半段
-    trend_window_sec_end: 900
+    trend_window_sec_start: 30
+    trend_window_sec_end: 780
     leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.99
-    leg1_share_price_2: 0.99
-    leg1_share_price_3: 0.99
-    leg1_share_amount_1: 4 # 大额捡漏
+    leg1_share_price_1: 0.50
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.95
+    leg1_share_amount_1: 7
     leg1_share_amount_2: 4
-    leg1_share_amount_3: 4
-    max_slippage: 0.05
+    leg1_share_amount_3: 3
+    max_slippage: 0.03
     patterns: []
     sell_threshold: 0.05
     enable_stop_loss: false

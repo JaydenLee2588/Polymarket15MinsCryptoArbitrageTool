@@ -69,6 +69,7 @@ def process_log_file(filepath, output_path, price_interval=0.05):
     strategy_stats = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl": 0.0, "resolutions": 0, "sells": 0})
     price_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0}))  # strategy -> price_bucket -> stats
     time_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0}))   # strategy -> time_bucket -> stats
+    real_time_agg = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0})) # strategy -> real_time_bucket -> stats
 
     with open(filepath, 'r', encoding='utf-8') as f:
         for line in f:
@@ -87,7 +88,7 @@ def process_log_file(filepath, output_path, price_interval=0.05):
             
             if action == "买入":
                 # 记录入场信息
-                open_trades[(strat, mkt)] = {"minutes": mins, "price": price}
+                open_trades[(strat, mkt)] = {"minutes": mins, "price": price, "timestamp": data['timestamp']}
             
             elif action in ["止盈", "时间止损", "决议", "决议赎回"]:
                 pnl = data['pnl']
@@ -109,22 +110,39 @@ def process_log_file(filepath, output_path, price_interval=0.05):
                 if entry_info:
                     entry_mins = entry_info["minutes"]
                     entry_price = entry_info["price"]
+                    entry_time = entry_info.get("timestamp", data['timestamp']) # Fallback to current if missing
                     
-                    # 时间聚合 (10秒为一个桶)
+                    # 时间聚合 (30秒为一个桶)
                     seconds_total = int(entry_mins * 60)
-                    bucket_start = (seconds_total // 10) * 10
+                    bucket_start = (seconds_total // 30) * 30
                     time_agg[strat][bucket_start]["count"] += 1
                     time_agg[strat][bucket_start]["pnl"] += pnl
                     if pnl > 0:
                         time_agg[strat][bucket_start]["wins"] += 1
                     
-                    # 价格聚合 (0.05为一个桶)
+                    # 价格聚合 (0.02为一个桶)
                     if entry_price > 0:
                         price_bucket = round(entry_price / price_interval) * price_interval
                         price_agg[strat][price_bucket]["count"] += 1
                         price_agg[strat][price_bucket]["pnl"] += pnl
                         if pnl > 0:
                             price_agg[strat][price_bucket]["wins"] += 1
+                    
+                    # 实时时间聚合 (30分钟为一个桶) - 使用买入时间
+                    # timestamp format "HH:MM:SS"
+                    try:
+                        t_parts = entry_time.split(':')
+                        h = int(t_parts[0])
+                        m = int(t_parts[1])
+                        # 30 min bucket
+                        bucket_m = 0 if m < 30 else 30
+                        rt_key = f"{h:02d}:{bucket_m:02d}"
+                        real_time_agg[strat][rt_key]["count"] += 1
+                        real_time_agg[strat][rt_key]["pnl"] += pnl
+                        if pnl > 0:
+                            real_time_agg[strat][rt_key]["wins"] += 1
+                    except:
+                        pass
                     
                     del open_trades[(strat, mkt)]
 
@@ -189,12 +207,12 @@ def process_log_file(filepath, output_path, price_interval=0.05):
         report.append(f"| **合计** | **{strat_total_count}** | - | **{strat_total_pnl_str}** |")
         report.append("")
     
-    # 3. 按时间聚合 (10秒粒度)
-    report.append("\n## 3. 按下单时间聚合 (10s)\n")
+    # 3. 按开盘时间聚合 (30秒粒度)
+    report.append("\n## 3. 按距离开盘时间聚合 (30s)\n")
     
     for strat in all_strats:
         report.append(f"### {strat}\n")
-        report.append("| 下单时刻 | 交易次数 | 胜率 | 累计PnL |")
+        report.append("| 开盘后时间 | 交易次数 | 胜率 | 累计PnL |")
         report.append("| :---: | :---: | :---: | :---: |")
         
         buckets = sorted(time_agg[strat].keys())
@@ -213,11 +231,52 @@ def process_log_file(filepath, output_path, price_interval=0.05):
             
             start_m = b // 60
             start_s = b % 60
-            end_total = b + 10
+            end_total = b + 30
             end_m = end_total // 60
             end_s = end_total % 60
             
             time_str = f"{start_m}m{start_s:02d}s - {end_m}m{end_s:02d}s"
+            report.append(f"| {time_str} | {count} | {win_rate:.1f}% | {pnl_str} |")
+        
+        strat_total_pnl_str = f"${strat_total_pnl:.2f}" if strat_total_pnl >= 0 else f"-${abs(strat_total_pnl):.2f}"
+        report.append(f"| **合计** | **{strat_total_count}** | - | **{strat_total_pnl_str}** |")
+        report.append("")
+
+    # 4. 按实际时间聚合 (30分钟粒度)
+    report.append("\n## 4. 按实际下单时间聚合 (30min)\n")
+    
+    for strat in all_strats:
+        report.append(f"### {strat}\n")
+        report.append("| 下单时段 | 交易次数 | 胜率 | 累计PnL |")
+        report.append("| :---: | :---: | :---: | :---: |")
+        
+        buckets = sorted(real_time_agg[strat].keys())
+        strat_total_count = 0
+        strat_total_pnl = 0.0
+        
+        for b in buckets:
+            count = real_time_agg[strat][b]["count"]
+            pnl = real_time_agg[strat][b]["pnl"]
+            wins = real_time_agg[strat][b]["wins"]
+            win_rate = (wins / count * 100) if count > 0 else 0
+            
+            strat_total_count += count
+            strat_total_pnl += pnl
+            pnl_str = f"${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+            
+            # b is "HH:MM" start time
+            # calculate end time
+            h, m = map(int, b.split(':'))
+            end_m = m + 30
+            end_h = h
+            if end_m >= 60:
+                end_m -= 60
+                end_h += 1
+            if end_h >= 24:
+                end_h -= 24
+            
+            time_str = f"{b} - {end_h:02d}:{end_m:02d}"
+            
             report.append(f"| {time_str} | {count} | {win_rate:.1f}% | {pnl_str} |")
         
         strat_total_pnl_str = f"${strat_total_pnl:.2f}" if strat_total_pnl >= 0 else f"-${abs(strat_total_pnl):.2f}"

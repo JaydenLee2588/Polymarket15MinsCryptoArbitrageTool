@@ -343,14 +343,40 @@ func formatIndicators(entry *TradeLogEntry) indicatorStrings {
 	}
 }
 
+// getBtcSession 获取当前的BTC交易时段
+func getBtcSession(t time.Time) string {
+	h := t.UTC().Hour()
+	inAsia := h >= 0 && h < 8
+	inEurope := h >= 7 && h < 16
+	inUs := h >= 13 && h < 22
+
+	if inEurope && inUs {
+		return "欧美重叠盘"
+	}
+	if inAsia && inEurope {
+		return "亚欧重叠盘"
+	}
+	if inAsia {
+		return "亚洲盘"
+	}
+	if inEurope {
+		return "欧洲盘"
+	}
+	if inUs {
+		return "美股盘"
+	}
+	return "非交易时段"
+}
+
 // formatBuyLine 格式化【买入】日志行
 func formatBuyLine(entry *TradeLogEntry) string {
 	buyTimeStr := entry.BuyTime.Format("15:04:05")
 	ind := formatIndicators(entry)
 
-	// 格式: 【时间】【配置】【市场】"【分钟】【买入】【方向】【数量】【价格】【成本】【指标...】"
-	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\"",
+	// 格式: 【时间】【时段】【配置】【市场】"【分钟】【买入】【方向】【数量】【价格】【成本】【指标...】"
+	line := fmt.Sprintf("【%s】【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\"",
 		buyTimeStr,
+		getBtcSession(entry.BuyTime),
 		entry.ConfigID,
 		entry.MarketSlug,
 		entry.MinutesIn,
@@ -369,14 +395,17 @@ func formatBuyLine(entry *TradeLogEntry) string {
 // formatSellLine 格式化【卖出/决议】日志行
 func formatSellLine(entry *TradeLogEntry) string {
 	sellTimeStr := entry.SellTime.Format("15:04:05")
-	if entry.SellTime.IsZero() {
-		sellTimeStr = time.Now().In(estLocation).Format("15:04:05")
+	sellTime := entry.SellTime
+	if sellTime.IsZero() {
+		sellTime = time.Now().In(estLocation)
+		sellTimeStr = sellTime.Format("15:04:05")
 	}
 
-	// 格式: 【时间】【配置】【市场】"【分钟】【卖出类型】【数量】【价格】【收入】【PnL】【决议结果】"
+	// 格式: 【时间】【时段】【配置】【市场】"【分钟】【卖出类型】【数量】【价格】【收入】【PnL】【决议结果】"
 	// 注意: 对应买入的“分钟”变成了卖出的“分钟”
-	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【%s】【%.0f】【%.4f】【$%.2f】【$%.2f】\" \"【%s】\"",
+	line := fmt.Sprintf("【%s】【%s】【%s】【%s】\"【%.1f分】【%s】【%.0f】【%.4f】【$%.2f】【$%.2f】\" \"【%s】\"",
 		sellTimeStr,
+		getBtcSession(sellTime),
 		entry.ConfigID,
 		entry.MarketSlug,
 		entry.SellMinutesIn,
@@ -399,8 +428,9 @@ func formatBuyFailureLine(entry *TradeLogEntry) string {
 	ind := formatIndicators(entry)
 
 	// 构建日志行 (买入失败格式)
-	line := fmt.Sprintf("【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\" \"【待定】 - 买入失败: %s\"",
+	line := fmt.Sprintf("【%s】【%s】【%s】【%s】\"【%.1f分】【买入】【%s】【%.0f】【%.4f】【$%.2f】\"\"【%s】【%s】【%s】【%s】\" \"【待定】 - 买入失败: %s\"",
 		buyTimeStr,
+		getBtcSession(entry.BuyTime),
 		entry.ConfigID,
 		entry.MarketSlug,
 		entry.MinutesIn,
