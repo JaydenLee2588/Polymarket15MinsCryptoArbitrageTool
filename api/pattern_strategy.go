@@ -1554,22 +1554,25 @@ func checkSniperBuySignal(state *PatternMarketState, cfg PatternStrategyConfig, 
 	if shouldDecisionDebug {
 		// 计算额外调试信息
 		isLongBreakout, isShortBreakout := src.CheckBreakout(currentPrice, high1m, low1m)
-		theoProb := src.NormalCDF(decision.ZScore)
-		edgeUp := theoProb - polyPriceUp
-		edgeDown := (1 - theoProb) - polyPriceDown
+		// theoProb := src.NormalCDF(decision.ZScore)
+		// edgeUp := theoProb - polyPriceUp
+		// edgeDown := (1 - theoProb) - polyPriceDown
 
-		log.Printf("🔍 [Sniper 调试][%s] 市场=%s | 阶段=%d | 剩余时间=%.0fs",
-			cfg.ID, state.Slug, decision.Phase, timeLeftSec)
-		log.Printf("   ├─ 价格: 币安=%.2f | 行权价=%.2f | 波动率=%.2f | Z值=%.3f (阈值=%.1f)",
-			currentPrice, state.StrikePrice, sigma, decision.ZScore, cfg.SniperConfig.ZScoreEntryThreshold)
-		log.Printf("   ├─ Poly: 上涨=%.4f | 下跌=%.4f | 价差=%.4f (阈值=%.4f)",
-			polyPriceUp, polyPriceDown, polySpread, cfg.SniperConfig.SpreadMax)
-		log.Printf("   ├─ 优势(Edge): 看涨=%.4f | 看跌=%.4f (阈值=%.4f)",
-			edgeUp, edgeDown, cfg.SniperConfig.EdgeThreshold)
-		log.Printf("   ├─ 突破: 看涨突破=%v | 看跌突破=%v | 1分高点=%.2f | 1分低点=%.2f",
-			isLongBreakout, isShortBreakout, high1m, low1m)
-		log.Printf("   └─ 决策: 动作=%s | 原因=%s",
-			decision.Action, decision.Reason)
+		_ = isLongBreakout
+		_ = isShortBreakout
+
+		// log.Printf("🔍 [Sniper 调试][%s] 市场=%s | 阶段=%d | 剩余时间=%.0fs",
+		// 	cfg.ID, state.Slug, decision.Phase, timeLeftSec)
+		// log.Printf("   ├─ 价格: 币安=%.2f | 行权价=%.2f | 波动率=%.2f | Z值=%.3f (阈值=%.1f)",
+		// 	currentPrice, state.StrikePrice, sigma, decision.ZScore, cfg.SniperConfig.ZScoreEntryThreshold)
+		// log.Printf("   ├─ Poly: 上涨=%.4f | 下跌=%.4f | 价差=%.4f (阈值=%.4f)",
+		// 	polyPriceUp, polyPriceDown, polySpread, cfg.SniperConfig.SpreadMax)
+		// log.Printf("   ├─ 优势(Edge): 看涨=%.4f | 看跌=%.4f (阈值=%.4f)",
+		// 	edgeUp, edgeDown, cfg.SniperConfig.EdgeThreshold)
+		// log.Printf("   ├─ 突破: 看涨突破=%v | 看跌突破=%v | 1分高点=%.2f | 1分低点=%.2f",
+		// 	isLongBreakout, isShortBreakout, high1m, low1m)
+		// log.Printf("   └─ 决策: 动作=%s | 原因=%s",
+		// 	decision.Action, decision.Reason)
 	}
 
 	// 日志: 阶段和决策 (仅非HOLD时) - 暂时注释掉以减少刷屏，只由下单逻辑打印
