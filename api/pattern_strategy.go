@@ -695,7 +695,7 @@ func executePatternBuy(state *PatternMarketState, cfg PatternStrategyConfig, sid
 				log.Printf("⚠️ [Pattern][%s][模拟] 订单簿查询失败: %v", cfg.ID, depthErr)
 				// 订单簿查询失败不阻断模拟，只记录警告
 			} else if depthResult.AvailableSize < amount {
-				log.Printf("❌ [Pattern][%s][模拟] 订单簿深度不足 | 需要=%.2f | 可用=%.2f | 模拟失败",
+				log.Printf("❌ [Pattern][%s][模拟买入] 订单簿深度不足，买入失败 | 需要=%.2f | 可用=%.2f",
 					cfg.ID, amount, depthResult.AvailableSize)
 				// 清除 pending 状态
 				patternMarketStatesMu.Lock()
@@ -704,7 +704,7 @@ func executePatternBuy(state *PatternMarketState, cfg PatternStrategyConfig, sid
 				LogBuyFailure(logEntry, fmt.Sprintf("模拟失败: 订单簿深度不足 (需要=%.2f, 可用=%.2f)", amount, depthResult.AvailableSize))
 				return
 			} else {
-				log.Printf("✅ [Pattern][%s][模拟] 订单簿验证通过 | 需要=%.2f | 可用=%.2f",
+				log.Printf("✅ [Pattern][%s][模拟买入] 订单簿验证通过 | Check=%.2f | Avail=%.2f",
 					cfg.ID, amount, depthResult.AvailableSize)
 			}
 		}
@@ -967,16 +967,16 @@ func executePatternSellWithReason(state *PatternMarketState, pos *PatternPositio
 				log.Printf("⚠️ [Pattern][%s][模拟卖出] 订单簿查询失败: %v", cfg.ID, depthErr)
 				// 订单簿查询失败不阻断模拟，只记录警告
 			} else if depthResult.AvailableSize < pos.Amount {
-				log.Printf("❌ [Pattern][%s][模拟卖出] 买盘深度不足 | 需要=%.2f | 可用=%.2f | 模拟失败",
+				log.Printf("❌ [Pattern][%s][模拟卖出] 订单簿深度不足，卖出失败 | 需要=%.2f | 可用=%.2f",
 					cfg.ID, pos.Amount, depthResult.AvailableSize)
 				pos.SellFailCount++
 				// 记录模拟卖出失败到交易历史
 				UpdateSellEntry(state.Slug, cfg.ID,
-					fmt.Sprintf("模拟失败:买盘深度不足(需要=%.2f,可用=%.2f)", pos.Amount, depthResult.AvailableSize),
+					fmt.Sprintf("模拟失败:深度不足(需%.2f,有%.2f)", pos.Amount, depthResult.AvailableSize),
 					sellPrice, 0, 0, 0)
 				return
 			} else {
-				log.Printf("✅ [Pattern][%s][模拟卖出] 订单簿验证通过 | 需要=%.2f | 可用=%.2f",
+				log.Printf("✅ [Pattern][%s][模拟卖出] 订单簿验证通过 | Check=%.2f | Avail=%.2f",
 					cfg.ID, pos.Amount, depthResult.AvailableSize)
 			}
 		}
