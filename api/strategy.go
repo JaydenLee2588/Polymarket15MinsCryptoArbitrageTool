@@ -230,6 +230,19 @@ func StartSimulation(configs []StrategyConfig) bool {
 				log.Printf("✅ 赎回服务已启动 (决议后 %d 秒自动赎回)", src.RedemptionDelaySeconds)
 			}
 		}
+	} else {
+		// 仿真模式：初始化只读 ClobClient 用于获取订单簿深度
+		// 使用一个随机的 Dummy Private Key (这是为了满足构造函数要求，不会用于交易)
+		dummyKey := "0000000000000000000000000000000000000000000000000000000000000001"
+		client, err := src.NewClobOrderClientWithEOA(dummyKey, "", "")
+		if err != nil {
+			log.Printf("⚠️ 无法初始化只读 ClobClient (将跳过订单簿检查): %v", err)
+		} else {
+			clobClientMu.Lock()
+			clobOrderClient = client
+			clobClientMu.Unlock()
+			log.Println("✅ 已初始化只读 ClobClient (用于模拟盘订单簿验证)")
+		}
 	}
 
 	// 创建停止通道和完成确认通道
