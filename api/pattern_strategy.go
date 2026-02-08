@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -674,6 +675,41 @@ func executePatternBuy(state *PatternMarketState, cfg PatternStrategyConfig, sid
 		RSISlope:        indicators.RSISlope,
 	}
 
+	// ========== 模拟交易 - 增加现实性验证 ==========
+	if cfg.TradingMode != "real" {
+		// 1. 模拟执行延迟 (100-300ms)
+		simDelay := time.Duration(100+rand.Intn(200)) * time.Millisecond
+		time.Sleep(simDelay)
+
+		// 2. 检查订单簿深度 (需要 ClobOrderClient)
+		clobClientMu.Lock()
+		client := clobOrderClient
+		clobClientMu.Unlock()
+
+		if client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			depthResult, depthErr := client.GetOrderbookDepth(ctx, tokenID, price, "BUY")
+			cancel()
+
+			if depthErr != nil {
+				log.Printf("⚠️ [Pattern][%s][模拟] 订单簿查询失败: %v", cfg.ID, depthErr)
+				// 订单簿查询失败不阻断模拟，只记录警告
+			} else if depthResult.AvailableSize < amount {
+				log.Printf("❌ [Pattern][%s][模拟] 订单簿深度不足 | 需要=%.2f | 可用=%.2f | 模拟失败",
+					cfg.ID, amount, depthResult.AvailableSize)
+				// 清除 pending 状态
+				patternMarketStatesMu.Lock()
+				delete(state.Positions, cfg.ID)
+				patternMarketStatesMu.Unlock()
+				LogBuyFailure(logEntry, fmt.Sprintf("模拟失败: 订单簿深度不足 (需要=%.2f, 可用=%.2f)", amount, depthResult.AvailableSize))
+				return
+			} else {
+				log.Printf("✅ [Pattern][%s][模拟] 订单簿验证通过 | 需要=%.2f | 可用=%.2f",
+					cfg.ID, amount, depthResult.AvailableSize)
+			}
+		}
+	}
+
 	// ========== 真实交易模式 ==========
 	if cfg.TradingMode == "real" {
 		clobClientMu.Lock()
@@ -910,6 +946,41 @@ func executePatternSellWithReason(state *PatternMarketState, pos *PatternPositio
 	originalAmount := pos.Amount
 	filledAmount := pos.Amount // 默认假设全部成交 (模拟模式)
 	actualSellPrice := sellPrice
+
+	// ========== 模拟交易 - 增加现实性验证 ==========
+	if cfg.TradingMode != "real" {
+		// 1. 模拟执行延迟 (100-300ms)
+		simDelay := time.Duration(100+rand.Intn(200)) * time.Millisecond
+		time.Sleep(simDelay)
+
+		// 2. 检查订单簿深度 (需要 ClobOrderClient)
+		clobClientMu.Lock()
+		client := clobOrderClient
+		clobClientMu.Unlock()
+
+		if client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			depthResult, depthErr := client.GetOrderbookDepth(ctx, pos.TokenID, sellPrice, "SELL")
+			cancel()
+
+			if depthErr != nil {
+				log.Printf("⚠️ [Pattern][%s][模拟卖出] 订单簿查询失败: %v", cfg.ID, depthErr)
+				// 订单簿查询失败不阻断模拟，只记录警告
+			} else if depthResult.AvailableSize < pos.Amount {
+				log.Printf("❌ [Pattern][%s][模拟卖出] 买盘深度不足 | 需要=%.2f | 可用=%.2f | 模拟失败",
+					cfg.ID, pos.Amount, depthResult.AvailableSize)
+				pos.SellFailCount++
+				// 记录模拟卖出失败到交易历史
+				UpdateSellEntry(state.Slug, cfg.ID,
+					fmt.Sprintf("模拟失败:买盘深度不足(需要=%.2f,可用=%.2f)", pos.Amount, depthResult.AvailableSize),
+					sellPrice, 0, 0, 0)
+				return
+			} else {
+				log.Printf("✅ [Pattern][%s][模拟卖出] 订单簿验证通过 | 需要=%.2f | 可用=%.2f",
+					cfg.ID, pos.Amount, depthResult.AvailableSize)
+			}
+		}
+	}
 
 	// ========== 真实交易模式 ==========
 	if cfg.TradingMode == "real" {
