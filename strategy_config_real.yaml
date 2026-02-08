@@ -8,9 +8,9 @@ groups:
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78
     leg1_share_price_3: 0.84          
-    leg1_share_amount_1: 70
-    leg1_share_amount_2: 40
-    leg1_share_amount_3: 30
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
     max_slippage: 0.03                
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          
@@ -38,9 +38,9 @@ groups:
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78      
     leg1_share_price_3: 0.84      
-    leg1_share_amount_1: 70
-    leg1_share_amount_2: 40
-    leg1_share_amount_3: 30
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
     max_slippage: 0.03
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.2      
@@ -68,9 +68,9 @@ groups:
     leg1_share_price_1: 0.69         
     leg1_share_price_2: 0.81
     leg1_share_price_3: 0.86
-    leg1_share_amount_1: 70
-    leg1_share_amount_2: 40
-    leg1_share_amount_3: 30         
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3        
     max_slippage: 0.03               
     price_tick_size: 0.01
     sigmoid_sensitivity: 4.5
@@ -98,9 +98,9 @@ groups:
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78
     leg1_share_price_3: 0.84
-    leg1_share_amount_1: 70
-    leg1_share_amount_2: 40
-    leg1_share_amount_3: 30
+    leg1_share_amount_1: 7
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
     scan_interval_sec: 0
     max_slippage: 0.03
     price_tick_size: 0.01
