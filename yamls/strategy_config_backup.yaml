@@ -31,7 +31,7 @@ groups:
     min_trend_percent_up: 0.0026      # 这个降成0.18会输很惨，从0.2提到0.26，胜率微降，收益增加
     min_trend_percent_down: 0.0026    # 这个降成0.18会输很惨，从0.22提到0.26，胜率微降，收益增加
     trend_window_sec_start: 320
-    trend_window_sec_end: 480   # 似乎7分20秒未到尽头，赚的很多。         
+    trend_window_sec_end: 480   # 似乎7分20秒未到尽头，赚的很多。
     leg0_share_price_0: 0.62          
     leg1_share_price_1: 0.71
     leg1_share_price_2: 0.78

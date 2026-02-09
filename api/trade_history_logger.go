@@ -345,26 +345,30 @@ func formatIndicators(entry *TradeLogEntry) indicatorStrings {
 
 // getBtcSession 获取当前的BTC交易时段
 func getBtcSession(t time.Time) string {
-	h := t.UTC().Hour()
-	inAsia := h >= 0 && h < 8
-	inEurope := h >= 7 && h < 16
-	inUs := h >= 13 && h < 22
+	utc := t.UTC()
+	totalMinutes := utc.Hour()*60 + utc.Minute()
 
-	if inEurope && inUs {
-		return "欧美重叠盘"
-	}
-	if inAsia && inEurope {
-		return "亚欧重叠盘"
-	}
-	if inAsia {
+	// 亚洲盘: 00:00 - 07:00
+	if totalMinutes >= 0 && totalMinutes < 420 {
 		return "亚洲盘"
 	}
-	if inEurope {
+	// 亚欧重叠盘: 07:00 - 08:30
+	if totalMinutes >= 420 && totalMinutes < 510 {
+		return "亚欧重叠盘"
+	}
+	// 欧洲盘: 08:30 - 13:00
+	if totalMinutes >= 510 && totalMinutes < 780 {
 		return "欧洲盘"
 	}
-	if inUs {
+	// 欧美重叠盘: 13:00 - 16:30 (流动性通常最高)
+	if totalMinutes >= 780 && totalMinutes < 990 {
+		return "欧美重叠盘"
+	}
+	// 美股盘: 16:30 - 21:00
+	if totalMinutes >= 990 && totalMinutes < 1260 {
 		return "美股盘"
 	}
+	// 非交易时段: 21:00 - 00:00 (流动性通常最差)
 	return "非交易时段"
 }
 

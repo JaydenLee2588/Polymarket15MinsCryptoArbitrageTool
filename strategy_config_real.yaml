@@ -3,15 +3,15 @@ groups:
     min_trend_percent_up: 0.0026
     min_trend_percent_down: 0.0026
     trend_window_sec_start: 320
-    trend_window_sec_end: 420 # 砍掉420秒后
+    trend_window_sec_end: 390 # 砍到390秒后
     leg0_share_price_0: 0.62          
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.84          
-    leg1_share_amount_1: 7
-    leg1_share_amount_2: 4
-    leg1_share_amount_3: 3
-    max_slippage: 0.03                
+    leg1_share_price_1: 0.70
+    leg1_share_price_2: 0.75
+    leg1_share_price_3: 0.78
+    leg1_share_amount_1: 15
+    leg1_share_amount_2: 12
+    leg1_share_amount_3: 9
+    max_slippage: 0.02          
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          
     volatility_btc: 0.0012
@@ -35,13 +35,13 @@ groups:
     trend_window_sec_start: 350   
     trend_window_sec_end: 420 # 砍掉420秒后
     leg0_share_price_0: 0.55      
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78      
-    leg1_share_price_3: 0.84      
-    leg1_share_amount_1: 7
+    leg1_share_price_1: 0.70
+    leg1_share_price_2: 0.74      
+    leg1_share_price_3: 0.77      
+    leg1_share_amount_1: 5
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3
-    max_slippage: 0.03
+    max_slippage: 0.02
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.2      
     volatility_btc: 0.0012
@@ -62,7 +62,7 @@ groups:
   - id: "仿AI测试参数3"
     min_trend_percent_up: 0.0038
     min_trend_percent_down: 0.0038
-    trend_window_sec_start: 330
+    trend_window_sec_start: 390 # 设置到390秒后
     trend_window_sec_end: 420 # 砍掉420秒后
     leg0_share_price_0: 0.10         
     leg1_share_price_1: 0.69         
@@ -88,34 +88,3 @@ groups:
     min_edge_tier_2: -0.50
     min_edge_tier_3: -0.50
     min_edge_tier_4: -0.50
-
-  - id: "仿AI测试参数2"
-    min_trend_percent_up: 0.004       
-    min_trend_percent_down: 0.004
-    trend_window_sec_start: 305
-    trend_window_sec_end: 360 # 砍掉360秒后      
-    leg0_share_price_0: 0.01
-    leg1_share_price_1: 0.71
-    leg1_share_price_2: 0.78
-    leg1_share_price_3: 0.84
-    leg1_share_amount_1: 7
-    leg1_share_amount_2: 4
-    leg1_share_amount_3: 3
-    scan_interval_sec: 0
-    max_slippage: 0.03
-    price_tick_size: 0.01
-    sigmoid_sensitivity: 4.1
-    volatility_btc: 0.002
-    volatility_eth: 0.002
-    volatility_sol: 0.002
-    volatility_xrp: 0.002
-    tier_0_z_score: 0.5
-    tier_1_z_score: 1.6
-    tier_2_z_score: 2.2
-    tier_3_z_score: 2.5
-    tier_4_z_score: 3
-    min_edge_tier_0: -0.5
-    min_edge_tier_1: -0.5
-    min_edge_tier_2: -0.5
-    min_edge_tier_3: -0.5
-    min_edge_tier_4: -0.5
