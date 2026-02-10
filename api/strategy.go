@@ -2312,6 +2312,6 @@ func printHeartbeatIndicators() {
 	}
 
 	if len(logs) > 0 {
-		log.Printf("📊 指标概览:\n%s", strings.Join(logs, "\n"))
+		// log.Printf("📊 指标概览:\n%s", strings.Join(logs, "\n"))
 	}
 }

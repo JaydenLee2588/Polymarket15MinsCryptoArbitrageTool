@@ -88,6 +88,13 @@ func main() {
 	// }
 	// defer datarecorder.GetInstance().Close()
 
+	// 初始化交易历史日志
+	if err := api.InitTradeHistoryLogger(); err != nil {
+		log.Printf("⚠️ 交易历史日志初始化失败: %v", err)
+	} else {
+		defer api.CloseTradeHistoryLogger()
+	}
+
 	// 设置 API 数据库引用
 	api.SetDatabase(database.GetDB())
 
