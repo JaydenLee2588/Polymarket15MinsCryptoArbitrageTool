@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, time
 import os
 
 # --- Configuration ---
-LOG_FILE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260214\trade_history_constract.log"
-BASE_DATE_STR = "2026-02-11" 
-OUTPUT_IMAGE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260214\pnl_chart.png"
+LOG_FILE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260219\trade_history_constract.log"
+BASE_DATE_STR = "2026-02-19" 
+OUTPUT_IMAGE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260219\pnl_chart.png"
 
 # Session definitions (EST)
 SESSIONS = [
@@ -22,20 +22,20 @@ SESSIONS = [
 ]
 
 STRATEGIES_OF_INTEREST = [
-    "基本2号",
-    "基准1号OLD",
-    "策略5", 
-    "策略5+Sniper",
-    "基本3号"
+    "基准1号",
+    "简化版",
+    "低阈值11",
+    "低阈值13",
+    "高阈值17",
+    "高阈值19",
+    "高阈值21",
+    "时段版210-300",
+    "时段版300-390",
+    "时段版480-570",
+    "时段版570-660"
 ]
 
-STRATEGY_MAPPING = {
-    "Pattern策略5": "策略5",
-    "Pattern策略5+Sniper": "策略5+Sniper",
-    "基本2号": "基本2号",
-    "基准1号OLD": "基准1号OLD",
-    "基本3号": "基本3号"
-}
+STRATEGY_MAPPING = {}
 
 def parse_pnl(line):
     # Identifying PnL events: "决议赎回", "Sniper:profit_target_reached", "Sniper:zscore_reverted"

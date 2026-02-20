@@ -3,7 +3,7 @@ import re
 import pandas as pd
 from datetime import datetime, timedelta
 
-LOG_FILE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260214\trade_history_constract.log"
+LOG_FILE = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260219\trade_history_constract.log"
 
 STRATEGY_MAPPING = {
     "Pattern策略5": "策略5",
@@ -22,7 +22,7 @@ def analyze_by_order_time():
     pnl_data = [] # {hour: int, pnl: float, strategy: str}
     
     # Track date
-    current_date = datetime(2026, 2, 11) # Start date guess, will auto-adjust
+    current_date = datetime(2026, 2, 19) # Start date guess, will auto-adjust
     # Actually, we need to handle date keying properly or just use the time string for the hour?
     # User said: "Aggregate 24 hours (different days same time merged)"
     # So we just need the info: "Order placed at HH:MM:SS", we extract HH.
@@ -79,7 +79,8 @@ def analyze_by_order_time():
                  
              pnl_data.append({
                  "hour": hour,
-                 "pnl": pnl
+                 "pnl": pnl,
+                 "strategy": strategy
              })
 
     # Aggregate
@@ -88,18 +89,32 @@ def analyze_by_order_time():
         print("No PnL data found.")
         return
 
-    hourly_stats = df.groupby('hour')['pnl'].sum().sort_index()
+    # Pivot table: rows=hour, cols=strategy, values=pnl, aggfunc=sum
+    pivot_df = df.pivot_table(index='hour', columns='strategy', values='pnl', aggfunc='sum', fill_value=0.0)
     
-    output_file = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260214\hourly_pnl_report.txt"
+    # Add a Total column
+    pivot_df['总计'] = pivot_df.sum(axis=1)
+    
+    # Reindex to ensure all 24 hours are present
+    pivot_df = pivot_df.reindex(range(24), fill_value=0.0)
+    
+    output_file = r"d:\Github\OtherProjects\BackupPolymarket15MinsCryptoArbitrageTool\logs\20260219\hourly_pnl_report.txt"
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write(f"{'Hour':<5} | {'PnL ($)':<10}\n")
-        f.write("-" * 20 + "\n")
+        # Header
+        strategies = [col for col in pivot_df.columns if col != '总计'] + ['总计']
+        header_str = f"{'Hour':<5} | " + " | ".join(f"{s[:15]:>15}" for s in strategies) + "\n"
+        f.write(header_str)
+        f.write("-" * 200 + "\n")
+        
         for h in range(24):
-            val = hourly_stats.get(h, 0.0)
-            f.write(f"{h:02d}:00 | {val:>10.2f}\n")
+            row_str = f"{h:02d}:00 | " + " | ".join(f"{pivot_df.loc[h, s]:>15.2f}" for s in strategies) + "\n"
+            f.write(row_str)
             
-        f.write("-" * 20 + "\n")
-        f.write(f"Total | {hourly_stats.sum():>10.2f}\n")
+        f.write("-" * 200 + "\n")
+        
+        totals = pivot_df.sum()
+        total_str = f"{'Total':<5} | " + " | ".join(f"{totals[s]:>15.2f}" for s in strategies) + "\n"
+        f.write(total_str)
     
     print(f"Report saved to {output_file}")
 

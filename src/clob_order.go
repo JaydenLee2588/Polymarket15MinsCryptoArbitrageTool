@@ -15,12 +15,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync" // Added for mutex
 	"time"
 
 	"github.com/Danny-Dasilva/CycleTLS/cycletls"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
+	"golang.org/x/sync/singleflight"
 )
 
 // OrderType 订单类型
@@ -53,6 +55,15 @@ type ClobOrderClient struct {
 	httpClient     *http.Client      // 标准 HTTP 客户端 (用于兼容其他文件)
 	cycleTLSClient cycletls.CycleTLS // CycleTLS 客户端 (用于绕过 Cloudflare)
 	chainID        *big.Int
+
+	feeRateCache      map[string]feeRateCacheEntry // TokenID -> FeeRateBps
+	feeRateCacheMutex sync.RWMutex
+	feeRateSF         singleflight.Group
+}
+
+type feeRateCacheEntry struct {
+	FeeRateBps string
+	ExpiresAt  time.Time
 }
 
 // ClobOrderResult 下单结果
@@ -193,6 +204,7 @@ func NewClobOrderClientWithEOA(privateKeyHex string, makerAddress string, apiEOA
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		cycleTLSClient: cycleTLSClient,
 		chainID:        PolygonMainnetChainID,
+		feeRateCache:   make(map[string]feeRateCacheEntry),
 	}, nil
 }
 
@@ -214,6 +226,75 @@ func (c *ClobOrderClient) GetAPIAddress() string {
 // GetSignerAddress 返回签名者地址 (EOA)
 func (c *ClobOrderClient) GetSignerAddress() string {
 	return c.signerAddress.Hex()
+}
+
+// GetFeeRate 获取指定 TokenID 的市场手续费率 (带 15 分钟缓存和 SingleFlight 防击穿)
+func (c *ClobOrderClient) GetFeeRate(ctx context.Context, tokenID string) (string, error) {
+	// 1. 尝试从缓存读取
+	c.feeRateCacheMutex.RLock()
+	entry, exists := c.feeRateCache[tokenID]
+	c.feeRateCacheMutex.RUnlock()
+
+	if exists && time.Now().Before(entry.ExpiresAt) {
+		return entry.FeeRateBps, nil
+	}
+
+	// 2. 缓存未命中或已过期，使用 singleflight 发起 HTTP 请求防止并发击穿
+	// 返回类型是 fmt.Sprintf() 出来的 string
+	v, err, _ := c.feeRateSF.Do(tokenID, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/fee-rate?tokenID=%s", ClobHost, tokenID)
+
+		// 降级超时到 3 秒
+		resp, reqErr := c.cycleTLSClient.Do(url, cycletls.Options{
+			Timeout: 3,
+			Headers: map[string]string{
+				"Accept": "application/json",
+			},
+		}, "GET")
+
+		if reqErr != nil {
+			return "1000", fmt.Errorf("请求 fee-rate 失败: %w，已降级返回 1000", reqErr)
+		}
+
+		if resp.Status != http.StatusOK {
+			return "1000", fmt.Errorf("请求 fee-rate 异常，状态码: %d，已降级返回 1000", resp.Status)
+		}
+
+		var feeResp struct {
+			FeeRateBps  string `json:"fee_rate_bps"`
+			FeeRateBps2 string `json:"feeRateBps"`
+		}
+
+		if jsonErr := json.Unmarshal([]byte(resp.Body), &feeResp); jsonErr != nil {
+			return "1000", fmt.Errorf("解析 fee-rate 响应失败: %w，已降级返回 1000", jsonErr)
+		}
+
+		feeRate := feeResp.FeeRateBps
+		if feeRate == "" {
+			feeRate = feeResp.FeeRateBps2
+		}
+		if feeRate == "" {
+			feeRate = "1000" // 默认退回 1000
+		}
+
+		// 3. 将结果写入缓存 (过期时间设为 15 分钟)
+		c.feeRateCacheMutex.Lock()
+		c.feeRateCache[tokenID] = feeRateCacheEntry{
+			FeeRateBps: feeRate,
+			ExpiresAt:  time.Now().Add(15 * time.Minute),
+		}
+		c.feeRateCacheMutex.Unlock()
+
+		return feeRate, nil
+	})
+
+	if err != nil {
+		// 返回降级默认值 "1000" 并在外部打印日志，防止阻塞发单进程
+		fmt.Printf("⚠️ 警告: %v\n", err)
+		return v.(string), nil
+	}
+
+	return v.(string), nil
 }
 
 // PlaceOrder 下单（核心函数）
@@ -351,13 +432,20 @@ func (c *ClobOrderClient) PlaceOrder(
 	// 🔍 DEBUG: 确认签名类型
 	//fmt.Printf("🔐 [DEBUG] 签名配置: Maker=%s, Signer=%s, Type=%d (0=EOA, 1=PROXY, 2=SAFE)\n",
 	//	c.address.Hex(), c.signerAddress.Hex(), sigType)
+	// 🔍 获取当前市场的动态费率并缓存
+	feeRateBpsStr, err := c.GetFeeRate(ctx, tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("无法获取该市场的动态交易费率: %w", err)
+	}
+
 	orderData := &model.OrderData{
-		Maker:         c.address.Hex(), // Maker 地址 (代理钱包或 EOA)
-		Taker:         OperatorAddress, // Polymarket 操作员地址
-		TokenId:       tokenID,
-		MakerAmount:   makerAmount.String(),
-		TakerAmount:   takerAmount.String(),
-		FeeRateBps:    "1000",
+		Maker:       c.address.Hex(), // Maker 地址 (代理钱包或 EOA)
+		Taker:       OperatorAddress, // Polymarket 操作员地址
+		TokenId:     tokenID,
+		MakerAmount: makerAmount.String(),
+		TakerAmount: takerAmount.String(),
+		FeeRateBps:  feeRateBpsStr, // 取代硬编码的 "1000"
+
 		Nonce:         nonce,
 		Signer:        c.signerAddress.Hex(), // Signer 地址 (签名的 EOA)
 		Expiration:    expiration,

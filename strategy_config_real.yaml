@@ -8,9 +8,9 @@ groups:
     leg1_share_price_1: 0.70
     leg1_share_price_2: 0.75
     leg1_share_price_3: 0.78
-    leg1_share_amount_1: 15
-    leg1_share_amount_2: 12
-    leg1_share_amount_3: 9
+    leg1_share_amount_1: 5
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
     max_slippage: 0.02          
     price_tick_size: 0.01
     sigmoid_sensitivity: 2.0          
@@ -68,7 +68,7 @@ groups:
     leg1_share_price_1: 0.69         
     leg1_share_price_2: 0.81
     leg1_share_price_3: 0.86
-    leg1_share_amount_1: 7
+    leg1_share_amount_1: 5
     leg1_share_amount_2: 4
     leg1_share_amount_3: 3        
     max_slippage: 0.03               
@@ -88,3 +88,34 @@ groups:
     min_edge_tier_2: -0.50
     min_edge_tier_3: -0.50
     min_edge_tier_4: -0.50
+  - id: 基准1号OLD
+    min_trend_percent_up: 0.0015
+    min_trend_percent_down: 0.0015
+    fair_price_trend_factor: 0
+    trend_window_sec_start: 320
+    trend_window_sec_end: 480
+    leg0_share_price_0: 0.62
+    leg1_share_price_1: 0.71
+    leg1_share_price_2: 0.78
+    leg1_share_price_3: 0.84
+    leg1_share_amount_1: 5
+    leg1_share_amount_2: 4
+    leg1_share_amount_3: 3
+    scan_interval_sec: 0
+    max_slippage: 0.03
+    price_tick_size: 0.01
+    sigmoid_sensitivity: 1.8
+    volatility_btc: 0.0012
+    volatility_eth: 0.0012
+    volatility_sol: 0.0024
+    volatility_xrp: 0.0015
+    tier_0_z_score: 1.5
+    tier_1_z_score: 1.6
+    tier_2_z_score: 1.7
+    tier_3_z_score: 1.8
+    tier_4_z_score: 2
+    min_edge_tier_0: 0.03
+    min_edge_tier_1: 0.02
+    min_edge_tier_2: 0.01
+    min_edge_tier_3: 0
+    min_edge_tier_4: 0
