@@ -10,7 +10,18 @@ STRATEGY_MAPPING = {
     "Pattern策略5+Sniper": "策略5+Sniper",
     "基本2号": "基本2号",
     "基准1号OLD": "基准1号OLD",
-    "基本3号": "基本3号"
+    "基本3号": "基本3号",
+    "低阈值11": "低阈值11",
+    "低阈值13": "低阈值13",
+    "基准1号": "基准1号",
+    "时段版210-300": "时段版210-300",
+    "时段版300-390": "时段版300-390",
+    "时段版480-570": "时段版480-570",
+    "时段版570-660": "时段版570-660",
+    "简化版": "简化版",
+    "高阈值17": "高阈值17",
+    "高阈值19": "高阈值19",
+    "高阈值21": "高阈值21"
 }
 
 def parse_pnl_str(s):
@@ -92,7 +103,7 @@ def analyze_by_order_time():
     # Pivot table: rows=hour, cols=strategy, values=pnl, aggfunc=sum
     pivot_df = df.pivot_table(index='hour', columns='strategy', values='pnl', aggfunc='sum', fill_value=0.0)
     
-    # Add a Total column
+    # Add a Total column: (Sum of all strategies)
     pivot_df['总计'] = pivot_df.sum(axis=1)
     
     # Reindex to ensure all 24 hours are present
@@ -115,6 +126,26 @@ def analyze_by_order_time():
         totals = pivot_df.sum()
         total_str = f"{'Total':<5} | " + " | ".join(f"{totals[s]:>15.2f}" for s in strategies) + "\n"
         f.write(total_str)
+
+        # Winning Rate calculation
+        # Win Rate = (Count of PnL > 0) / (Total count of trades)
+        win_rates = {}
+        for s in strategies:
+            if s == '总计':
+                # Total Win Rate across all data points
+                all_trades = df['pnl']
+                wins = (all_trades > 0).sum()
+                total_trades = len(all_trades)
+            else:
+                strat_trades = df[df['strategy'] == s]['pnl']
+                wins = (strat_trades > 0).sum()
+                total_trades = len(strat_trades)
+            
+            rate = (wins / total_trades * 100) if total_trades > 0 else 0
+            win_rates[s] = rate
+            
+        winrate_str = f"{'胜率':<5} | " + " | ".join(f"{win_rates[s]:>14.1f}%" for s in strategies) + "\n"
+        f.write(winrate_str)
     
     print(f"Report saved to {output_file}")
 

@@ -164,6 +164,7 @@ def plot_pnl(df):
         hourly_pnl_all[strat] = s_data
         
     hourly_pnl_all = hourly_pnl_all.fillna(0)
+    # Total Calculation: Sum of hourly PnLs, then cumsum
     result_df['Total'] = hourly_pnl_all.sum(axis=1).cumsum()
 
     # Plotting
