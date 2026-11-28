@@ -1,2 +1,10 @@
 # 当前状态
-2026-11-27：V2.0 已经负责人批准；M0 Day 1 已授权启动。固定源代码基线 f7cfa2e0e8adac782ff2c55efc9e77c40e3e1d84。初次 GitHub 查询无 Issue、PR；原 docs 七份，未有 engineering 目录。初次创建分支及 Issue 返回 HTTP 403；本次重试成功创建 docs/engineering-v2-charter 分支，文档归档待 PR 验收。未构建、未运行测试、未测量性能、未交易。下一步：文档独立 PR、M0 Day 1 Issue 查重及创建、安全隔离验证与基线报告。以 GitHub 实际记录为准。
+
+2026-11-28：M0 Day 0 Docker PoC 已在 Mac mini 宿主机实际执行，当前状态 `M0_DAY0_POC_EXECUTED_PENDING_REVIEW`。
+
+- [Issue #3](https://github.com/JaydenLee2588/Polymarket15MinsCryptoArbitrageTool/issues/3)：OPEN，**当前唯一实施任务**。Ubuntu 24.04 LTS / linux/arm64 容器化与公开行情冒烟测试，分支 `poc/m0-day0-docker-smoke`（起点 main `492ee885d5042ec60539c09ca38c9a7754c81070`）。报告：`reports/engineering/poc/day0-docker-smoke.md`。
+- [Issue #2](https://github.com/JaydenLee2588/Polymarket15MinsCryptoArbitrageTool/issues/2)：**CLOSED / NOT_PLANNED**。旧版原生 macOS Day 1 实验已取消，不再恢复；其本地实验报告、脚本与 `tmp/` 缓存已按负责人授权删除。历史提交 `12e98295a3676eea5c292536654645a525b254e5` 仍保留在远端分支 `baseline/m0-day1-environment-baseline`，未删除、未改写。
+- **Day 1 将在 Docker PoC 通过独立审查后，以容器环境重新规划并新建 Issue。**
+- [PR #4](https://github.com/JaydenLee2588/Polymarket15MinsCryptoArbitrageTool/pull/4)（`docs/m0-day0-poc-status`）：截至本次核查仍为 OPEN、未合并，本分支未包含其内容，也未代为合并。两者都修改了本文件，合并时需由负责人选定保留版本。
+- PoC 实测摘要：镜像构建成功（Go 1.27.4 官方 SHA256 校验通过，go.mod/go.sum 未变）；无私钥启动、SQLite、`/health`、Web UI、只读 API、15 分钟连续运行、优雅停止与重启均通过。外部行情：Binance REST、Polymarket 市场发现（回退路径）、订单簿 REST/WS 通过；**Binance 合约 WS 的应用端点 0 消息（FAIL）**、**Polymarket `public-search` 已不返回 15m 市场**；应用内部行情链路（S11）因需启动模拟策略而 BLOCKED。
+- 全程未使用私钥或交易凭证、未执行真实或模拟交易、未访问生产数据库、未修改业务代码与依赖声明。尚无正式性能基线。以实际证据为准。

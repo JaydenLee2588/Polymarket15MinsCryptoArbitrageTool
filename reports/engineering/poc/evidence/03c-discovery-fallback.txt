@@ -1,0 +1,5 @@
+===== S09 app fallback endpoint check (2026-11-28T08:24:08Z) — same request shape as api/strategy.go:1344-1370 (GetMarkets slug=<prefix>-<UTC 15m window>)
+GET gamma /markets?slug=btc-updown-15m-1795853700 -> markets=1 active=True closed=False tokens=2 outcomes=["Up", "Down"]
+GET gamma /markets?slug=eth-updown-15m-1795853700 -> markets=1 active=True closed=False tokens=2 outcomes=["Up", "Down"]
+GET gamma /markets?slug=sol-updown-15m-1795853700 -> markets=1 active=True closed=False tokens=2 outcomes=["Up", "Down"]
+GET gamma /markets?slug=xrp-updown-15m-1795853700 -> markets=1 active=True closed=False tokens=2 outcomes=["Up", "Down"]

@@ -1,0 +1,89 @@
+
+===== START WITH NETWORK, PORT BOUND TO 127.0.0.1 ONLY (2026-11-28T08:18:31Z) =====
+$ docker run -d --name polymarket-lab-day0 --platform linux/arm64 -p 127.0.0.1:8090:8090 -e TRADING_MODE=simulation -e ENABLE_MAIN_STRATEGY=false -e ENABLE_PATTERN_STRATEGY=false -e SNIPER_MODE=false -e CONFIG_FILE= -e PATTERN_CONFIG_FILE= -e TELEGRAM_BOT_TOKEN= -e POLYMARKET_PRIVATE_KEY= -e PROXY_WALLET_ADDRESS= -e MAKER_ADDRESS= -e POLY_API_KEY= -e POLY_API_SECRET= -e POLY_PASSPHRASE= -e POLY_EOA_ADDRESS= -e BUILDER_KEY= -e BUILDER_SECRET= -e BUILDER_PASSPHRASE= -e DB_PATH=/app/data/trades.db -e BOT_DB_PATH=/app/data/bot.db polymarket-engineering-lab:day0
+e585229d37ee5eb7d62e8a372fecffe9745ad045b4862bd28fa6f5ccdbef03d0
+[exit=0]
+$ docker inspect polymarket-lab-day0 --format Running={{.State.Running}} ExitCode={{.State.ExitCode}}
+Running=true ExitCode=0
+[exit=0]
+$ docker port polymarket-lab-day0
+8090/tcp -> 127.0.0.1:8090
+[exit=0]
+
+===== HEALTH FROM HOST (must be 127.0.0.1 only) (2026-11-28T08:18:39Z) =====
+$ curl -sS -o /dev/null -w http=%{http_code}\n --max-time 10 http://127.0.0.1:8090/health
+http=200
+[exit=0]
+$ curl -sS --max-time 10 http://127.0.0.1:8090/health
+{"service":"Polymarket15MinsCryptoArbitrageTool","status":"ok"}
+[exit=0]
+
+===== S07 BINANCE SPOT REST (external connectivity, from inside container) (2026-11-28T08:18:39Z) =====
+endpoints per src/binance_rest.go:14-16
+$ docker exec polymarket-lab-day0 sh -c command -v curl >/dev/null || echo "(no curl in runtime image; see NOTE below)"
+(no curl in runtime image; see NOTE below)
+[exit=0]
+NOTE: runtime 镜像刻意不含 curl。外部连通性探测改用 builder 阶段镜像或宿主机执行：
+$ curl -sS -o /dev/null -w api.binance.com/api/v3/ticker/price?symbol=BTCUSDT -> http=%{http_code}\n --max-time 15 https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+api.binance.com/api/v3/ticker/price?symbol=BTCUSDT -> http=200
+[exit=0]
+$ curl -sS -o /dev/null -w api.binance.com/api/v3/klines 15m -> http=%{http_code}\n --max-time 15 https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=2
+api.binance.com/api/v3/klines 15m -> http=200
+[exit=0]
+$ bash -c curl -sS --max-time 15 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=1' | head -c 400
+[[1795853700000,"59694.74000000","59694.74000000","59552.00000000","59631.25000000","33.64534000",1795854599999,"2005455.00918660",10012,"9.11006000","542957.53131680","0"]][exit=0]
+
+===== S08 BINANCE FUTURES WS ENDPOINT (src/binance_ws.go:16) (2026-11-28T08:18:40Z) =====
+wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1m
+$ curl -sS -o /dev/null -w ws handshake -> http=%{http_code}\n --max-time 15 -H Connection: Upgrade -H Upgrade: websocket -H Sec-WebSocket-Version: 13 -H Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ== https://fstream.binance.com/stream?streams=btcusdt@kline_15m
+curl: (28) Operation timed out after 15002 milliseconds with 0 bytes received
+ws handshake -> http=000
+[exit=28]
+期望 http=101 (Switching Protocols)。其它值请原样记录。
+
+===== S09 POLYMARKET MARKET DISCOVERY (src/endpoint.go:4, src/search.go:16, api/strategy.go:1180-1189) (2026-11-28T08:18:55Z) =====
+实际发现方式：GET gamma-api/public-search?q=<btc|eth|sol|xrp> updown 15m&events_status=active
+$ curl -sS -o /dev/null -w public-search q=btc+updown+15m -> http=%{http_code}\n --max-time 20 https://gamma-api.polymarket.com/public-search?q=btc+updown+15m&events_status=active
+public-search q=btc+updown+15m -> http=200
+[exit=0]
+$ curl -sS -o /dev/null -w public-search q=eth+updown+15m -> http=%{http_code}\n --max-time 20 https://gamma-api.polymarket.com/public-search?q=eth+updown+15m&events_status=active
+public-search q=eth+updown+15m -> http=200
+[exit=0]
+$ curl -sS -o /dev/null -w public-search q=sol+updown+15m -> http=%{http_code}\n --max-time 20 https://gamma-api.polymarket.com/public-search?q=sol+updown+15m&events_status=active
+public-search q=sol+updown+15m -> http=200
+[exit=0]
+$ curl -sS -o /dev/null -w public-search q=xrp+updown+15m -> http=%{http_code}\n --max-time 20 https://gamma-api.polymarket.com/public-search?q=xrp+updown+15m&events_status=active
+public-search q=xrp+updown+15m -> http=200
+[exit=0]
+--- 关键：15m 市场是否仍然存在、slug 规则是否仍为 <sym>-updown-15m-<unix> ---
+$ bash -c curl -sS --max-time 20 'https://gamma-api.polymarket.com/public-search?q=btc+updown+15m&events_status=active' | python3 -c 'import sys,json; d=json.load(sys.stdin); ev=d.get("events",[]); print("events:",len(ev)); [print("  slug=",e.get("slug"),"active=",e.get("active"),"closed=",e.get("closed"),"end=",e.get("endDate")) for e in ev[:10]]'
+events: 3
+  slug= will-microstrategy-announce-holding-800k-btc-by-december-31-2026 active= True closed= False end= 2027-01-01T05:00:00Z
+  slug= will-el-salvador-hold-1b-of-btc-by-by active= True closed= False end= 2027-01-01T05:00:00Z
+  slug= microstrategy-announces-1000-btc-purchase-november-24-30-2026 active= True closed= False end= 2026-12-01T05:00:00Z
+[exit=0]
+
+===== S10 POLYMARKET CLOB ORDERBOOK + WS (src/realtime/rest.go:48,80,106; src/endpoint.go:8) (2026-11-28T08:19:01Z) =====
+$ curl -sS -o /dev/null -w clob.polymarket.com/book (no token_id, expect 4xx) -> http=%{http_code}\n --max-time 15 https://clob.polymarket.com/book
+clob.polymarket.com/book (no token_id, expect 4xx) -> http=400
+[exit=0]
+$ curl -sS -o /dev/null -w ws-subscriptions-clob handshake -> http=%{http_code}\n --max-time 15 -H Connection: Upgrade -H Upgrade: websocket -H Sec-WebSocket-Version: 13 -H Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ== https://ws-subscriptions-clob.polymarket.com/ws/market
+ws-subscriptions-clob handshake -> http=400
+[exit=0]
+
+===== S11 APPLICATION INTEGRATION — 预期为 BLOCKED (2026-11-28T08:19:02Z) =====
+代码事实：Polymarket MarketManager 在 api/strategy.go:373 创建，
+Binance WS 在 api/strategy.go:398 创建，两者都在 runSimulationLoop 内部，
+只能由 StartSimulation() 触发；StartSimulation 的唯一 HTTP 入口是
+POST /api/v1/sim-copy-trading（需操作码）。
+因此：不启动模拟策略 => 应用内部不会有任何行情更新。
+$ docker logs polymarket-lab-day0 --tail 40
+2026/11/28 08:18:31 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:18:31 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:18:31 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0318.log
+2026/11/28 08:18:31 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:18:31 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:18:31 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 08:18:31 📝 API 测试页面: http://0.0.0.0:8090/api/
+[exit=0]
+期望：日志中不出现 MarketManager / Binance WS 相关行。

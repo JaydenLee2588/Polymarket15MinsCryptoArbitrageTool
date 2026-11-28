@@ -1,0 +1,14 @@
+
+===== STOP EXPERIMENT CONTAINERS (images and previous experiment dirs untouched) (2026-11-28T08:39:39Z) =====
+$ docker stop -t 20 polymarket-lab-day0
+polymarket-lab-day0
+[exit=0]
+$ docker stop -t 20 polymarket-lab-day0-offline
+polymarket-lab-day0-offline
+[exit=0]
+$ docker ps -a --filter name=polymarket-lab-day0 --format {{.Names}} {{.Status}}
+polymarket-lab-day0 Exited (0) Less than a second ago
+polymarket-lab-day0-offline Exited (0) 21 minutes ago
+[exit=0]
+NOTE: 容器刻意保留（未 rm），以便复查状态与日志。
+      确认不再需要后手动删除： docker rm polymarket-lab-day0 polymarket-lab-day0-offline

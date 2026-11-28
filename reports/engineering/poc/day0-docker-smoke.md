@@ -1,0 +1,611 @@
+# M0 Day 0 — Docker 容器化与真实行情 Smoke Test
+
+**状态：PARTIAL — 容器化通过；外部行情 2 项 FAIL（接口漂移）；应用内部行情链路 BLOCKED（需授权）**
+
+Refs #3 · Refs #2（#2 已 CLOSED / NOT_PLANNED）
+报告更新：2026-11-28 (UTC)
+执行者：Claude Code，**Mac mini 原生 CLI 会话**（darwin/arm64，直接调用宿主机 Docker Desktop）
+
+---
+
+## 0. 一句话结论
+
+镜像在 Mac mini 上真实构建成功（Ubuntu 24.04.5 / linux/arm64 / Go 1.27.4，官方 SHA256 校验通过，
+go.mod/go.sum 未变）；应用在无私钥、无凭证下启动，SQLite、`/health`、Web UI、只读 API、
+15 分钟连续运行、优雅停止与同镜像重启全部通过。
+
+真实公开行情中发现两处**接口漂移**，均需修改业务代码才能修复，本阶段只登记不修：
+
+1. **Binance 合约 WS**：应用使用的 `wss://fstream.binance.com/stream?streams=...` 握手 101 但 30 秒 **0 条消息**；
+   同主机的 `/market/stream?streams=...` 30 秒 338 条。→ S08 **FAIL**（P-13）。
+2. **Polymarket 市场发现**：应用的主路径 `public-search q="btc updown 15m"` 已**不返回任何 15m 事件**；
+   应用代码自带的回退路径（按 `<sym>-updown-15m-<UTC 15m 窗口>` 构造 slug 调 `/markets?slug=`）
+   对 BTC/ETH/SOL/XRP 均返回有效市场。→ S09 **PASS（经回退路径）**，主路径失效登记为 P-12。
+
+S11（应用内部行情状态更新）在架构上必须启动模拟策略（`POST /api/v1/sim-copy-trading`）才能达成，
+未获授权，保持 **BLOCKED**。
+
+---
+
+## 1. 任务背景与本轮变更
+
+Issue #3 的核心目标：证明现有 Go 系统能在 Ubuntu Docker 容器中构建、启动、处理真实公开行情。
+本阶段不做性能优化、不建 Benchmark、不重构业务架构。状态词：PASS / FAIL / BLOCKED / NOT_RUN / UNVERIFIED。
+
+本轮（负责人 2026-11-28 决策）：
+
+- 取消旧版 M0 Day 1 原生 macOS 实验；Issue #2 已由负责人侧关闭（NOT_PLANNED，经 GitHub API 核实 `state=closed, state_reason=not_planned`）。
+- 清理旧 Day 1 本地产物（§2.1），将 Day 0 成果迁移到以最新 main 为起点的 `poc/m0-day0-docker-smoke`（§2.2）。
+- 在宿主机原生执行通道上实际执行构建与 S01–S15。上一版报告中的「执行通道不可用 / BLOCKED」结论已被本轮实测取代。
+
+---
+
+## 2. Git 与工作区
+
+### 2.1 旧 Day 1 产物清理（负责人授权）
+
+删除前核查：`Dockerfile` 不引用 `tmp/gomodcache` 或任何旧实验路径（依赖在容器内 `go mod download` 获取；
+`Dockerfile` 中出现的 `/tmp/` 是容器内临时下载路径）；`.dockerignore` 排除 `tmp/`；`scripts/poc/` 与
+`.env.lab.example` 无旧路径引用。因此删除不影响 Day 0 构建（随后构建成功即为实证）。
+
+实际删除清单（逐个 `rm -v` / `rmdir -v`，未使用 `git clean` / `git reset --hard`）：
+
+| 路径 | 归属依据 | Git 状态 |
+|---|---|---|
+| `reports/engineering/baseline/dependency-preparation.md` | Day 1 R2 Gate 3 报告 | 未跟踪 |
+| `reports/engineering/baseline/environment-baseline.md` | Day 1 Gate 1 | 未跟踪 |
+| `reports/engineering/baseline/gate0-handover.md` | Day 1 Gate 0 | 未跟踪 |
+| `reports/engineering/baseline/isolation-evidence.md` | Day 1 Gate 2 | 未跟踪 |
+| `reports/engineering/baseline/side-effect-audit.md` | Day 1 Gate 1 | 未跟踪 |
+| `reports/engineering/baseline/test-matrix.md` | Day 1 Gate 1 | 未跟踪 |
+| `reports/engineering/baseline/dependency-download.log` | Day 1 首轮依赖下载日志 | 被 `*.log` 忽略 |
+| `reports/engineering/baseline/scripts/01-preflight.sh` | Day 1 宿主机脚本 | 未跟踪 |
+| `reports/engineering/baseline/scripts/02-isolation-check.sh` | 同上 | 未跟踪 |
+| `reports/engineering/baseline/scripts/03-offline-validation.sh` | 同上 | 未跟踪 |
+| `reports/engineering/baseline/scripts/EXECUTION-GUIDE.md` | 同上 | 未跟踪 |
+| `reports/engineering/baseline/scripts/`（空目录） | 同上 | — |
+| `tmp/gomodcache/`（约 985 MB，Go 模块缓存，先 `chmod -R u+w`） | Day 1 隔离 GOMODCACHE（Day 1 R2 记录） | 未跟踪 |
+| `tmp/home/data/`、`tmp/home/logs/`、`tmp/home/`（均为空目录） | Day 1 隔离 HOME | 未跟踪 |
+| `tmp/.DS_Store`、`tmp/` | macOS 噪音 / 空目录 | 未跟踪 |
+
+修改撤销：`docs/engineering/CURRENT_STATUS.md` 的本地 diff 全部是 Day 1 R1/R2 记录，已 `git checkout -- <file>` 单文件撤销，
+随后在新分支上按本轮决策重写。
+
+保留：`.gitignore` 的本地 diff 只有一段（`.env.lab` / `.env.lab.*` / `!.env.lab.example`，注释 `Refs #3`），属 Day 0 配置，保留。
+
+`reports/engineering/baseline/day1-environment-baseline.md` 是旧分支上**已提交**文件，未执行删除命令；
+切换到以 main 为起点的新分支后自然不在工作树中，历史仍保存在远端分支。
+
+### 2.2 分支迁移
+
+| 项目 | 实测值 |
+|---|---|
+| `origin/main` | `492ee885d5042ec60539c09ca38c9a7754c81070`（`git fetch` 后核实；PR #1 合并点） |
+| PR #4 `docs/m0-day0-poc-status` | **OPEN，未合并**（head `178b1bdabe3512d77d0a5157a0fea6d01304ae5b`），未代为合并 |
+| Issue #3 | OPEN |
+| Issue #2 | CLOSED / not_planned |
+| 新分支 | `poc/m0-day0-docker-smoke`，`git switch -c ... origin/main`；未跟踪 Day 0 文件随工作树带入 |
+| 旧本地分支 | `git branch -d baseline/m0-day1-environment-baseline` **成功**（Git 提示：已合并到其上游 `origin/baseline/...`，但未合并到 HEAD），删除前位于 `12e9829`。未用 `-D` |
+| 远端分支 | 全部保留（`baseline/m0-day1-environment-baseline`、`docs/engineering-v2-charter`、`docs/m0-day0-poc-status`） |
+| 额外 worktree | 无（`git worktree list` 仅主目录） |
+| 新分支中 `reports/engineering/baseline/` | 不存在（已核实） |
+
+注意：PR #4 与本分支都修改了 `docs/engineering/CURRENT_STATUS.md`，先合并哪一个，另一个都会产生冲突，需负责人决定保留版本。
+
+---
+
+## 3. 执行环境（S01 前置条件）
+
+| 项目 | 实测值 |
+|---|---|
+| 宿主机 | Darwin arm64（Mac mini） |
+| Docker context | `desktop-linux` |
+| Docker Client / Engine | 29.4.2 / 29.4.2（API 1.54） |
+| Docker Desktop | 4.72.0 (225998) |
+| Engine OS/Arch | linux/arm64 |
+| containerd / runc | v2.2.3 / 1.3.5 |
+
+`evidence/00-execution-channel.txt` 是上一轮（沙箱会话）留下的历史记录，已被本轮取代，仅留档。
+
+---
+
+## 4. Dockerfile 审查（构建前）
+
+本轮**未修改** Dockerfile 与 `.dockerignore`。逐项核对：
+
+| 要求 | 结果 | 依据 |
+|---|---|---|
+| Ubuntu 24.04 LTS | ✔ | 两阶段 `FROM ubuntu:24.04`；运行镜像内 `PRETTY_NAME="Ubuntu 24.04.5 LTS"` |
+| linux/arm64 | ✔ | 镜像 `Arch=arm64 Os=linux`；容器内 `uname -m` = `aarch64` |
+| Go 1.27.4 官方 SHA256 | ✔ | 本轮独立核对 `https://go.dev/dl/?mode=json&include=all`：`go1.27.4.linux-arm64.tar.gz` `stable=true`，sha256 `3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92`，与 Dockerfile 一致；构建日志 `actual` 相同且 `sha256sum -c` → `OK` |
+| `GOTOOLCHAIN=local` | ✔ | builder 内 `go env GOTOOLCHAIN` = `local` |
+| go.mod / go.sum 不变 | ✔ | 构建内 `sha256sum -c` OK；宿主机前后摘要一致（§6）；`git diff origin/main -- go.mod go.sum` 为空 |
+| SQLite 与应用同容器 | ✔ | `modernc.org/sqlite` 纯 Go 内嵌（§7） |
+| 独立临时 SQLite | ✔ | `/app/data/trades.db`，无 Volume，容器删除即丢弃 |
+| 镜像不含原作者私钥 | ✔ | `.dockerignore` 排除 `.env*`；镜像内 `find` 无 `.env*` / `*.key` / `*_real.yaml` / `*.db`，唯一 `.pem` 为系统 CA 包 `/usr/lib/ssl/cert.pem` |
+| ENV 运行时注入 | ✔ | 镜像 ENV 仅安全默认值；凭证类变量全部由 `docker run -e` 注入为空 |
+| 无私钥启动 | ✔ | §9 |
+| 禁止真实/模拟交易 | ✔ | `TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、`ENABLE_PATTERN_STRATEGY=false`；未调用任何写入或策略启动接口 |
+| Web UI 仅本地 | ✔ | `-p 127.0.0.1:8090:8090`；宿主机 `lsof` 仅 `127.0.0.1:8090 (LISTEN)` |
+| 不挂载生产目录 / Docker Socket | ✔ | `Binds=[] Mounts=[]`；容器内无 `/var/run/docker.sock`；`Privileged=false CapAdd=[]`，进程 `CapEff=0` |
+
+本轮新增的 PoC 文件：`scripts/poc/wsprobe/main.go`（公开行情探测程序，`//go:build ignore`，不参与 `go build .` / `./...`，
+非业务代码），以及 `scripts/poc/day0-docker-smoke.sh` 新增 `probe` 子命令（在容器网络内运行探测，探测程序通过
+`docker cp` 注入一次性容器，不挂载宿主目录）。
+
+---
+
+## 5. 镜像构建结果（S01 / S02）
+
+### 5.1 第 1 次构建：FAIL（基础设施瞬时故障）
+
+```text
+$ docker build --platform linux/arm64 --progress=plain -t polymarket-engineering-lab:day0 .
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+ERROR: failed to build: failed to solve: failed to resolve source metadata for docker.io/docker/dockerfile:1: lease does not exist: not found
+[build exit=1 elapsed=704s]
+```
+
+完整日志：`evidence/01-build-attempt1.txt`。卡在拉取 BuildKit 前端镜像 `docker/dockerfile:1`，未进入任何构建步骤。
+
+诊断（实测）：宿主机 `curl https://registry-1.docker.io/v2/` → 401（正常的未认证响应）；
+容器内 `wget` 访问 Docker Hub 与 Binance 正常；`docker pull ubuntu:24.04` 成功。
+构建挂起期间我另起的一次 `docker pull docker/dockerfile:1` 在 60 秒内未完成并被我终止；
+**该 lease 错误很可能与这次并发拉取被中断有关**（根因假设，未验证）。
+随后单独重试 `docker pull docker/dockerfile:1` 成功（`Image is up to date`，digest `sha256:572cebbc…9183`）。
+未修改 Docker Desktop 设置、未修改 Dockerfile。
+
+### 5.2 第 2 次构建：PASS
+
+```text
+$ docker build --platform linux/arm64 --progress=plain -t polymarket-engineering-lab:day0 .
+[go-toolchain] actual  : 3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
+/tmp/go1.27.4.linux-arm64.tar.gz: OK
+[go-toolchain] checksum VERIFIED -> 允许解压
+go version go1.27.4 linux/arm64
+go.mod: OK
+go.sum: OK
+[deps] go.mod / go.sum unchanged
++ go build -buildvcs=false -trimpath -o /out/polymarket-tool .
+[build exit=0 elapsed=55s end=2026-11-28T08:17:05Z]
+```
+
+完整日志：`evidence/01-build.txt`。构建起点 HEAD `492ee885d5042ec60539c09ca38c9a7754c81070`，分支 `poc/m0-day0-docker-smoke`。
+Go 1.27.4 编译 go.mod 声明 `go 1.24.1` 的代码库未出现任何编译错误（关闭 P-11）。
+
+---
+
+## 6. 镜像身份与 Go 版本
+
+证据：`evidence/01b-image-identity.txt`
+
+| 项目 | 实测值 |
+|---|---|
+| 镜像标签 | `polymarket-engineering-lab:day0` |
+| **镜像 ID** | `sha256:54d8f544443779603d71ee6ffb4f5935a69926e03c39113f4e64f11f9d551270`（manifest list；containerd image store 下与 RepoDigest 相同） |
+| 平台 manifest | `sha256:b42b0080c169c0f1c6e16ee81824c46564d7ee11874c0130d4eb4f8987111f03` |
+| config | `sha256:614471b0796d3a44b9afaabfb14d51e850b240a97f409becf3240afb56874feb` |
+| 架构 | `Arch=arm64 Os=linux`，容器内 `uname -m` = `aarch64`（原生，非模拟） |
+| 大小 | 60,262,523 B |
+| 创建时间 | 2026-11-28T08:17:05Z |
+| 运行用户 | `app`（uid/gid 10001） |
+| Go（builder 阶段） | `go version go1.27.4 linux/arm64`；`GOTOOLCHAIN=local`、`GOFLAGS=-mod=readonly`、`CGO_ENABLED=1` |
+| builder 镜像 | `polymarket-engineering-lab:day0-builder`，仅用于 Go 版本核对与公开行情探测；不是运行镜像 |
+| go.mod sha256 | `d69fcade2bf5c6b30a92a047ed9a8ba391b07638d9c76d875e2f1134750f0f50`（构建前后一致） |
+| go.sum sha256 | `d8e4cba1de51a8717f59eaed3977db8ad32c2f220e59a41b171125ea806556db`（构建前后一致） |
+
+builder 镜像 ID 会随构建上下文变化（本轮先后为 `45dbc3eb…`、`8161c850…`，原因是新增了探测程序文件）；运行镜像未重建。
+
+---
+
+## 7. SQLite 部署与验证
+
+| 项目 | 核查结果 | 证据 |
+|---|---|---|
+| 驱动 | `modernc.org/sqlite` **v1.41.0** | `go.mod:11`；`internal/database/sqlite.go:12` 空导入 |
+| 驱动类型 | **纯 Go**，无 cgo、无外部系统库 | 依赖树中 `modernc.org/libc`、`mathutil`、`memory` 均为纯 Go |
+| `sql.Open` 驱动名 | `"sqlite"` | `internal/database/sqlite.go:32` |
+| 是否需要独立 SQLite 服务 | **不需要** | 嵌入进程内 |
+| 是否需要 `sqlite3` CLI | **不需要**（仅可选调试工具，未装进镜像） | — |
+| 连接池 | `MaxOpenConns(1)`、`MaxIdleConns(1)`、`ConnMaxLifetime(1h)` | `sqlite.go:38-40` |
+| WAL | `PRAGMA journal_mode=WAL`，失败只告警不致命 | `sqlite.go:43-45` |
+| 目录创建 | `os.MkdirAll(filepath.Dir(dbPath), 0755)` | `sqlite.go:27` |
+| 建表 | `CREATE TABLE IF NOT EXISTS simulation_trades` + 2 索引 + 列迁移 | `sqlite.go:58-89` |
+| 初始化失败后果 | `log.Fatalf` — **进程直接退出** | `main.go:79-81` |
+
+容器内路径（镜像 ENV）：`/app/data/trades.db`、`/app/data/bot.db`，日志 `/app/logs/YYYYMMDD/`。
+目录在 Dockerfile 中预建并 `chown app:app`，确保 uid 10001 可写。
+本次不引入持久化 Volume，容器删除后实验数据允许丢失。
+
+**「真正初始化成功」的验证方式**（不只看目录是否存在）：脚本调用只读接口
+`GET /api/v1/sim-stats`。该 handler 走 `database.GetTradeStats()` 实际查询
+`simulation_trades` 表（`api/simulation_stats.go:43`），返回 200 + 合法 JSON
+即证明表已建成且可查询。状态：**PASS**（§9）。
+
+---
+
+## 8. ENV 配置字段核查
+
+字段清单来自源码逐一核查（`os.Getenv` / `getEnv` 全量 grep），**不含任何真实值**。
+
+### 8.1 服务与存储
+
+| 变量 | 必填 | 默认值 | 读取位置 | 缺失时行为 |
+|---|---|---|---|---|
+| `HOST` | 否 | `0.0.0.0` | `main.go:156` | 监听所有网卡（见 §19.3） |
+| `PORT` | 否 | `8090` | `main.go:157` | 默认端口 **8090**（已重新核实） |
+| `DB_PATH` | 否 | `data/trades.db` | `main.go:78` | 相对 WORKDIR 创建 |
+| `BOT_DB_PATH` | 否 | `data/bot.db` | `main.go:104` | 仅在 Telegram Bot 启动时使用 |
+
+### 8.2 交易安全开关
+
+| 变量 | 默认值 | 读取位置 | 行为 |
+|---|---|---|---|
+| `TRADING_MODE` | 空 → `simulation` | `api/config_loader.go:286`、`api/pattern_config_loader.go:128` | **唯一的交易模式来源**，`"real"` 才进真实下单路径 |
+| `ENABLE_MAIN_STRATEGY` | 空 → 启用 | `api/strategy.go:98,320` | 必须显式 `false` |
+| `ENABLE_PATTERN_STRATEGY` | **`"true"`** | `main.go:181`、`api/strategy.go:280` | **代码默认开启**，必须显式 `false` |
+| `SNIPER_MODE` | 空 → false | `api/pattern_config_loader.go:181` | `=="true"` 才开 |
+| `CONFIG_FILE` | 空 → `strategy_config.yaml` | `api/config_loader.go:127,183` | 该文件**仓库中不存在** → 回退到空的默认配置 |
+| `PATTERN_CONFIG_FILE` | 空 → `strategy_config_3.yaml` | `main.go:182`、`api/strategy.go:282` | 该文件**仓库中不存在** → 跳过 Pattern 策略 |
+
+**重要架构事实**：YAML 配置文件里**没有** trading mode 字段。
+`TradingMode` 只从环境变量取（`config_loader.go:286`、`pattern_config_loader.go:128`），
+YAML 只提供阈值等参数。因此 `strategy_config_*_real.yaml` 本身不会让系统进入真实交易，
+真正的开关是 `TRADING_MODE`。这是个好设计，但也意味着一个环境变量就能切换真假盘。
+
+### 8.3 凭证类字段（本阶段全部留空）
+
+| 变量 | 读取位置 | 何时才被需要 | 留空时行为 |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | `main.go:102` | 启用 Telegram Bot | 打印「跳过 Telegram Bot」（`main.go:112`） |
+| `POLYMARKET_PRIVATE_KEY` | `api/strategy.go:123` | **仅当某配置组 `TradingMode=="real"`** | 打印错误并 `return false`，不启动策略；**不影响应用启动** |
+| `PROXY_WALLET_ADDRESS` / `MAKER_ADDRESS` | `strategy.go:133,139`、`pattern_strategy.go:1134,1136` | real 模式代理钱包 | 回退到 EOA 直签 |
+| `POLY_API_KEY` / `POLY_API_SECRET` / `POLY_PASSPHRASE` / `POLY_EOA_ADDRESS` | `strategy.go:150-153` | real 模式手动凭证 | 改为用私钥自动派生 API 凭证 |
+| `BUILDER_KEY` / `BUILDER_SECRET` / `BUILDER_PASSPHRASE` | `strategy.go:208-210` | real 模式**自动赎回**（链上写入） | 打印「Builder API 凭证未配置 (自动赎回将不可用)」—— **本阶段的期望状态** |
+| `POLYGON_RPC_URL` | `strategy.go:202` | real 模式赎回服务 | 默认 `https://polygon-rpc.com` |
+| `TX_WAIT_TIMEOUT_SECONDS` | `src/redeem.go:711` | 赎回交易等待 | 用代码默认值 |
+
+### 8.4 `.env.example` 与代码的偏差
+
+- `.env.example` 中存在但**代码从不读取**：`BUILDER_ADDRESS`、`SCAN_INTERVAL`（死配置）。
+- 代码读取但 `.env.example` **未记录**：`MAKER_ADDRESS`、`POLY_API_KEY`、`POLY_API_SECRET`、
+  `POLY_PASSPHRASE`、`POLY_EOA_ADDRESS`、`POLYGON_RPC_URL`（隐式配置，文档缺口）。
+
+### 8.5 实验配置外部化
+
+提供 `.env.lab.example`（**仅占位符**）。使用方式：`cp .env.lab.example .env.lab`，
+`docker run --env-file .env.lab ...`。已向 `.gitignore` 追加 `.env.lab` / `.env.lab.*`
+（保留 `!.env.lab.example`），并在 `.dockerignore` 中以 `.env.*` / `*.env` 排除，
+确保实验配置既不进 Git 也不进镜像。
+
+**不要从 `.env.example` 复制任何值** —— 原因见 §18.1。
+
+---
+## 9. 无私钥启动与 SQLite（S03 / S04 / A01）
+
+证据：`evidence/02-offline-start.txt`（`--network none`，无外网、无凭证）
+
+```text
+Running=true ExitCode=0 OOM=false Restarts=0
+2026/11/28 08:18:15 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:18:15 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:18:15 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0318.log
+2026/11/28 08:18:15 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:18:15 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:18:15 🚀 服务器启动在 http://0.0.0.0:8090
+```
+
+- 所有凭证变量为空字符串（`POLYMARKET_PRIVATE_KEY=`、`BUILDER_*=`、`POLY_API_*=`）；镜像内无 `.env` / `.env.example`。
+- 未生成任何测试钱包（模拟路径不需要，A04）。
+- SQLite：`/app/data/trades.db` + `-wal` + `-shm` 已创建；`GET /api/v1/sim-stats`（实际查询 `simulation_trades` 表）返回
+  `200 {"success":true,...,"trade_count":0,...}`，证明表已建成且可查询。
+- 观察：trade history 日志文件名 `_0318` 与 UTC `08:18` 不一致，像是按美东时间命名（代码内部时区设置，未深究，不影响本阶段）。
+
+## 10. HTTP、Web UI 与只读 API（S05 / S06）
+
+| 请求 | 结果 |
+|---|---|
+| `GET /health`（容器内） | `200` `{"service":"Polymarket15MinsCryptoArbitrageTool","status":"ok"}` |
+| `GET /health`（宿主机 `127.0.0.1:8090`） | `200` |
+| `GET /`（Web UI） | `200` `text/html`，1782 B，`<title>Polymarket 15-Min Crypto Arbitrage Tool</title>` |
+| `GET /api/v1/config` | `200` `{"success":true,"config_file":"strategy_config.yaml","groups":[{...全 0 默认值...}]}` |
+| `GET /api/v1/sim-stats` | `200`，trade_count=0 |
+
+未调用任何写入型接口：`DELETE /api/v1/trades`、`PUT /api/v1/config`、`POST /api/v1/config/reload`、
+`/api/v1/sim-copy-trading`、`/api/v1/sim-stop-trading`。
+
+只读接口清单（经代码确认）：`/health`、`/`、`/index.html`、`/api-test.html`、`GET /api/v1/sim-stats`、`GET /api/v1/config`。
+
+## 11. 公开行情 —— 外部连通性（S07–S10）
+
+应用容器以正常 bridge 网络启动（`-p 127.0.0.1:8090:8090`，`evidence/03-online-market-data.txt`）。
+外部探测在**容器网络内**执行（`evidence/03b-container-probe.txt`，`scripts/poc/wsprobe/main.go`），
+请求形态与应用代码一致；宿主机侧 curl 探测同时留档于 `03-online-market-data.txt`。
+**这里证明的是“外部接口可达且有数据”，不等于“应用内部已接收行情”**（后者见 §12）。
+
+### 11.1 Binance
+
+| ID | 请求 | 结果 |
+|---|---|---|
+| S07 | `GET api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=2`（`src/binance_rest.go`） | **200**，2 行 |
+| S07 | 宿主机 `ticker/price`、`klines` | 200 / 200 |
+| S08 | **[APP]** `wss://fstream.binance.com/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade`（`src/binance_ws.go:16` 的 URL 形态） | 握手 **101**，30 s 内 **0 条消息** |
+| 诊断 | `wss://fstream.binance.com/ws/btcusdt@aggTrade` | 101，30 s **0 条** |
+| 诊断 | `wss://fstream.binance.com/market/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade` | 101，30 s **338 条**，首条 1.53 s（`{"stream":"btcusdt@kline_1m","data":{"e":"kline",...}}`） |
+| 诊断 | `wss://stream.binance.com:9443/stream?streams=...`（现货） | 101，30 s **83 条**，首条 2.23 s |
+
+结论：网络可达、服务端可推送；**应用使用的合约 WS 路径不再推送行情**，而 `/market/stream` 路径正常推送。
+这与“合约 WS 按 market / public / private 分路径”的端点迁移相符（**根因假设**，未查阅官方公告核实）。
+修复需改 `src/binance_ws.go:16`（业务代码），本阶段不改 → **S08 FAIL**，登记 P-13。
+
+宿主机 curl 的 WS 握手测试返回 `000`（超时 exit=28），这是 curl 的 HTTP Upgrade 测试方式不适用，以容器内 gorilla/websocket 结果为准。
+
+### 11.2 Polymarket
+
+| ID | 请求 | 结果 |
+|---|---|---|
+| S09 主路径 | `GET gamma-api/public-search?q=btc updown 15m&events_status=active`（`api/strategy.go:1180-1195`） | 200，3 个事件，**全部不是 15m 市场**（MicroStrategy / El Salvador 等长期市场）。eth/sol/xrp 查询同为 200 |
+| S09 回退路径 | `GET gamma-api/markets?slug=<sym>-updown-15m-1795853700`（`api/strategy.go:1344-1370` 的请求形态，UTC 15m 对齐） | BTC / ETH / SOL / XRP **均 1 个市场**，`active=True closed=False`，2 个 token，`outcomes=["Up","Down"]`（`evidence/03c-discovery-fallback.txt`） |
+| S09 | `GET gamma-api/events?slug=btc-updown-15m-1795853700` | 200，`"Bitcoin Up or Down - November 28, 3:15AM-3:30AM ET"`，`acceptingOrders=true` |
+| S10 | `GET clob.polymarket.com/book?token_id=<tok0>` | **200**，23 bids / 76 asks |
+| S10 | `wss://ws-subscriptions-clob.polymarket.com/ws/market`，发送 `{"assets_ids":[2 tokens],"type":"market"}` + `"type":"book"`（与 `src/realtime/stream.go:254-268` 相同） | 握手 **101**，30 s **9453 条**，首条 945 ms（`[{"market":"0x0c45…","asset_id":"2769…","bids":[...]` ） |
+
+结论：
+- 15m 市场**仍然存在**，slug 规则 `<sym>-updown-15m-<unix>` 与 `outcomes` 文本仍与代码假设一致。
+- `public-search` **已不返回 15m 事件**，应用主发现路径失效；回退路径的请求形态有效 → **S09 PASS（经回退路径，外部层）**，主路径失效登记 P-12。
+- 订单簿 REST 与 WS 订阅格式有效 → **S10 PASS（外部层）**。
+- 新观察：市场描述中结算来源为 **Chainlink BTC/USD TWAP**（“time-weighted average price … generated by Chainlink”）。
+  项目策略以 Binance 价格为参考，结算口径变化与策略有效性相关，属后续阶段议题（P-15），不在本 PoC 范围。
+
+## 12. 应用内部行情集成（S11 / A03）
+
+**BLOCKED（需授权）。** 本轮实测与静态结论一致：在不启动策略的前提下，应用运行 15 分钟内日志中
+没有任何 MarketManager / Binance WS 相关行（§13），内部行情状态不会更新。
+
+所有行情能力都在 `runSimulationLoop()` 内部创建：Polymarket `MarketManager`（`api/strategy.go:373-387`）、
+Binance `BinanceKlineClient`（`api/strategy.go:396-407`），只能经 `StartSimulation()` 触发，其唯一 HTTP 入口为
+`POST /api/v1/sim-copy-trading`（需操作码）。另一条启动路径（`ENABLE_PATTERN_STRATEGY=true` + 配置文件）
+会自动拉起 Pattern 策略，同样属于策略执行。
+
+最小验证方案（**仍待负责人批准，未执行**）：保持 `TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、
+凭证全空，调用一次 `POST /api/v1/sim-copy-trading?type=2`，观察 60–120 秒日志后 `POST /api/v1/sim-stop-trading`。
+副作用：可能在临时 `simulation_trades` 表写入模拟成交。
+
+**根据 §11 的结果，预期该验证会暴露 P-13**：Binance 合约 WS 路径 0 消息，应用内部 Binance 数据大概率为空；
+Polymarket 侧预期经回退路径发现市场。这只是预测，未实测，不作为结论。
+
+## 13. 连续运行（S12）
+
+证据：`evidence/04-observe-15min.txt`。实际时长 **15 分 17 秒**（`08:23:53Z` → `08:39:10Z`），每分钟采样 1 次，共 15 次：
+
+| 指标 | 结果 |
+|---|---|
+| `running` | 15/15 true |
+| `restarts` | 0 |
+| `/health`（宿主机） | 15/15 HTTP 200 |
+| CPU | 0.00% |
+| 内存 | 16.77 → 16.92 MiB（上限 7.75 GiB） |
+| 日志 | 仅启动 7 行，无错误、无重复告警、无断连 |
+| SQLite 文件 | 大小未变 |
+
+说明：这是**空闲进程**的稳定性观察（未启动策略、无行情接入），不能代表带行情负载的稳定性，也不是 Benchmark。
+
+## 14. 停止与重启（S13 / S14）
+
+证据：`evidence/05-lifecycle.txt`
+
+- `docker stop -t 20` → `ExitCode=0 OOMKilled=false`，日志 `🛑 正在关闭服务器...` → `✅ 服务器已优雅退出`（同一秒内完成）。**S13 PASS**
+- 删除容器后用同一镜像重建 → `Running=true`；`/health` 200；`/api/v1/sim-stats` 200（新临时库，trade_count=0）。**S14 PASS**
+- 测试结束：`polymarket-lab-day0`、`polymarket-lab-day0-offline` 均 `Exited (0)`，容器保留未删除以便复查（`evidence/06-teardown.txt`）。
+
+## 15. 安全核查（S15）
+
+证据：`evidence/02-offline-start.txt`、`evidence/05b-isolation.txt`
+
+| 检查 | 结果 |
+|---|---|
+| 特权 / 能力 | `Privileged=false CapAdd=[]`；PID 1 `CapPrm=CapEff=0000000000000000` |
+| 挂载 | `Binds=[] Mounts=[]`；无 `/var/run/docker.sock` |
+| 端口 | `127.0.0.1:8090` only（`docker port` 与宿主机 `lsof`） |
+| 用户 | uid 10001 `app` |
+| 凭证 | 所有凭证类 ENV 为空；镜像内无 `.env` / `.env.example` / 私钥文件 |
+| 交易 | `TRADING_MODE=simulation`；Pattern 策略日志确认禁用；`sim-stats` 全程 trade_count=0；未调用任何策略 / 写入接口 |
+| 生产数据 | 未挂载、未访问；仅容器内临时库 |
+
+记录缺陷：`05b-isolation.txt` 中筛选 `ENABLE_*` 变量的 grep 正则写错（`ENABLE_=`），未打印出两个 `ENABLE_*_STRATEGY` 值；
+其取值由同文件夹中 `docker run -e ENABLE_MAIN_STRATEGY=false -e ENABLE_PATTERN_STRATEGY=false` 命令行、
+镜像 ENV（`01b-image-identity.txt`）及应用日志 `Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)` 共同证明。
+
+**S15 PASS。**
+
+---
+
+## 16. S01–S15 验收矩阵
+
+| ID | 验证项目 | 状态 | 证据 / 说明 |
+|---|---|---|---|
+| S01 | Docker 镜像实际构建成功 | **PASS** | 第 2 次构建 exit=0（第 1 次因拉取前端镜像失败，§5.1）；镜像 `sha256:54d8f544…1270` |
+| S02 | Go 应用实际编译成功 | **PASS** | go1.27.4 linux/arm64，`go build .` 成功，go.mod/go.sum 未变 |
+| S03 | 容器及应用正常启动（无私钥） | **PASS** | `--network none`，凭证全空，Running=true |
+| S04 | SQLite 实际初始化成功 | **PASS** | db/wal/shm 存在；`sim-stats` 查表 200 |
+| S05 | HTTP 健康检查 | **PASS** | 容器内与宿主机 `127.0.0.1` 均 200 |
+| S06 | Web UI 与只读 API | **PASS** | `/` 200 HTML；`/api/v1/config`、`/api/v1/sim-stats` 200 |
+| S07 | Binance REST 行情 | **PASS** | klines / ticker 200，有数据 |
+| S08 | Binance WebSocket 行情 | **FAIL** | 应用 URL 形态 101 + 0 消息/30 s；`/market/stream` 338 条/30 s（P-13，需改业务代码） |
+| S09 | Polymarket 市场发现 | **PASS（回退路径）** | `public-search` 主路径不再返回 15m（P-12）；`/markets?slug=` 回退形态 4/4 币种命中 |
+| S10 | Polymarket 订单簿 REST / WS | **PASS** | book 200（23/76 档）；WS 101 + 9453 条/30 s |
+| S11 | 应用内部行情接收及状态更新 | **BLOCKED** | 需启动模拟策略，未获授权（§12） |
+| S12 | 连续运行观察 | **PASS（空闲进程）** | 15 分 17 秒，15/15 健康，0 重启 |
+| S13 | 容器正常停止 | **PASS** | ExitCode=0，优雅退出日志 |
+| S14 | 相同镜像重新启动 | **PASS** | 新容器启动、健康、查库正常 |
+| S15 | 资金、凭证及生产数据安全 | **PASS** | §15 |
+
+合计：PASS 12（S09、S12 带限定）· FAIL 1（S08）· BLOCKED 1（S11）· 未执行 0。
+
+---
+
+## 17. A01–A07 架构观察
+
+| ID | 观察项 | 结论 | 依据 |
+|---|---|---|---|
+| A01 | 应用是否支持无私钥启动 | **支持（实测）** | §9 |
+| A02 | 公开行情是否依赖交易认证 | **不依赖认证，但依赖策略启动** | 模拟模式用 dummy key 构造只读客户端（`api/strategy.go:235-245`）；外部行情接口全部匿名可用（§11） |
+| A03 | 行情与交易模块是否强耦合 | **存在（实测确认）** | 15 分钟运行无任何行情组件启动；只能经 `StartSimulation` 拉起（§12） |
+| A04 | 是否需要独立测试钱包 | **不需要** | 本轮未生成任何钱包 |
+| A05 | SQLite 驱动及部署方式 | `modernc.org/sqlite` v1.41.0，纯 Go，进程内嵌（实测可用） | §7、§9 |
+| A06 | 原项目 API 是否存在兼容性问题 | **存在（实测）** | P-12 Polymarket 搜索漂移；P-13 Binance 合约 WS 路径漂移；P-15 结算口径变化 |
+| A07 | 实验配置是否与镜像正确分离 | **是（实测）** | 镜像内无任何 `.env*`；ENV 仅安全默认值；凭证全部运行时注入 |
+
+---
+
+## 18. 安全边界
+
+### 18.1 凭证泄露（已由负责人决策关闭，记录留档）
+
+> **处置结论（2026-11-28，项目负责人）**：已与原作者确认，`BUILDER_ADDRESS` 对应钱包余额
+> 低于 1 美元且原作者已弃用该账号，本议题**不再跟进**，不作为 Issue #3 的阻塞项。
+> 以下内容作为审计留档保留，不要求本阶段修复。
+
+提示词 §8.1 的假设与实测不符，**实际情况更需要处理**：
+
+| 字段 | `.env.example` 实测状态 | 是否在 `origin/main` |
+|---|---|---|
+| `POLYMARKET_PRIVATE_KEY` | **空值** | 空值 |
+| `TELEGRAM_BOT_TOKEN` | 空值 | 空值 |
+| `BUILDER_KEY` | **已填充**（36 字符，UUID 形态） | **是** |
+| `BUILDER_SECRET` | **已填充**（44 字符，base64-32B 形态） | **是** |
+| `BUILDER_PASSPHRASE` | **已填充**（64 字符） | **是** |
+| `BUILDER_ADDRESS` | **已填充**（42 字符，`0x` 地址形态） | **是** |
+
+叠加两个事实后性质才清楚：
+
+1. 本仓库是**公开仓库**（匿名 `git ls-remote` 成功，见 evidence/00）。
+2. 这组 `BUILDER_*` 在代码里的用途是构造 `src.Redeemer`
+   （`api/strategy.go:212-231`），经 `relayer-v2.polymarket.com` 执行**代理钱包赎回**，
+   属链上资金操作路径，不是只读行情凭证。
+
+本次会话对这些值的处理：**未读取其内容、未输出、未复制进任何实验配置、
+未写入镜像、未写入日志、未用于任何认证或签名**。只检测了「是否非空」与长度形态。
+
+原建议（现已由上述决策覆盖，仅留档）：吊销 / 轮换凭证、核查钱包资产、清空 `.env.example`、
+通知原作者、加 secret scanning。负责人已确认资金风险可忽略，故不执行。
+
+仍然生效的一条工程约束：**本次实验不使用 `.env.example` 中的任何值**，
+`.dockerignore` 继续把 `.env.example` 排除在构建上下文之外。
+
+`.dockerignore` 已把 `.env.example` 排除在构建上下文之外，但那只防镜像，不防仓库。
+
+### 18.2 自动交易路径清点（§538：不要只依赖单个环境变量）
+
+共三条路径可能导致交易行为，`ENABLE_PATTERN_STRATEGY=false` **只能堵住第一条**：
+
+| # | 路径 | 触发条件 | 本次的阻断手段 |
+|---|---|---|---|
+| 1 | 进程启动自动拉起 Pattern 策略（`main.go:184-201`） | `ENABLE_PATTERN_STRATEGY != "false"`（**代码默认 `"true"`**）且 `PATTERN_CONFIG_FILE` 存在 | 显式 `ENABLE_PATTERN_STRATEGY=false`，并且 `PATTERN_CONFIG_FILE` 留空（默认指向仓库中不存在的 `strategy_config_3.yaml`） |
+| 2 | HTTP `POST /api/v1/sim-copy-trading` → `StartSimulation` → 可能初始化真实下单客户端 | 操作码正确 **且** 某配置组 `TradingMode=="real"` | `TRADING_MODE=simulation`；不调用该接口 |
+| 3 | `StartSimulation` 内部二次拉起 Pattern 策略（`api/strategy.go:279-304`） | `ENABLE_PATTERN_STRATEGY == "true"` 且配置文件存在 | 同 #1 |
+
+真实下单与链上写入的实际闸门有三道，必须同时成立才会发生：
+`TradingMode=="real"` **且** `POLYMARKET_PRIVATE_KEY` 非空 **且**（赎回路径还需）`BUILDER_*` 非空。
+本次实验三者全部不满足。
+
+另外注意 `api/strategy.go:226-230`：real 模式下 `redeemer.Start()` 会启动**定时自动赎回**
+（决议后 N 秒自动执行链上赎回）。这是一条不需要人工触发的链上写入路径。
+
+### 18.3 其它安全观察（与上线目标相关，非本次任务范围）
+
+1. **操作码硬编码在源码里**（`api/auth.go:10`，明文常量，公开仓库可见），
+   且是全部写入型接口的唯一鉴权手段。建议改为环境变量注入并轮换。
+2. **`DELETE /api/v1/trades` 没有操作码保护**（`api/routes.go:27` 直接注册
+   `DeleteTradesHandler`，未包 `RequireOperationCode`）。handler 只校验方法为 DELETE
+   （`api/data_management.go:13`），所以浏览器 GET 不会误删；但任何能访问该端口的客户端
+   都能一次请求清空全部交易记录。
+3. **`HOST` 默认 `0.0.0.0`**（`main.go:156`）。与第 1、2 点叠加，等于在局域网上暴露了
+   一个用公开已知操作码保护的控制面。本次实验用 `-p 127.0.0.1:8090:8090` 限制暴露面，
+   但这是实验层的缓解，不是代码层的修复。
+4. **反 Cloudflare 指纹伪装**：`src/clob_order.go:194-195,514-516` 用 CycleTLS 伪装
+   Chrome 120 的 JA3 指纹，`src/utls_dialer.go` 用 uTLS 伪装 `HelloChrome_Auto`，
+   注释明确写「绕过 Cloudflare TLS 指纹检测」。这不是行情读取所必需（它在下单路径上），
+   但属于规避服务商机器人检测的手段，对「最终上线」是实质性的 ToS / 合规风险，
+   建议作为独立议题评估。本次未通过代理绕过任何区域访问限制（§588）。
+
+
+### 18.4 本轮边界遵守情况
+
+未执行：真实资金交易、真实订单提交或撤销、资金转移及赎回、链上授权、模拟交易执行、策略启动、
+写入型 API 调用、访问生产数据库、读取任何真实凭证值、业务代码修改、依赖升级、修改 Docker Desktop 设置、
+特权容器、挂载宿主目录或 Docker socket、通过代理绕过区域限制、`git clean` / `git reset --hard`、
+强制删除分支、删除远端分支、改写历史、强制推送、合并 PR、关闭 Issue。
+
+---
+
+## 19. 问题登记
+
+| ID | 类别 | 已观察事实 | 根因假设（未验证） | 最小修复建议 | 需审批 | 状态 |
+|---|---|---|---|---|---|---|
+| P-01 / P-02 / P-03 | ENV / NETWORK / DELIVERY | 上一轮沙箱会话无 Docker daemon、出口受限、无法 push | — | 改用宿主机原生 CLI | — | **CLOSED**（本轮在原生通道实测通过） |
+| P-04 | SAFETY | `.env.example` 含原作者 `BUILDER_*` | — | — | 已决策 | **CLOSED**（负责人 2026-11-28 决策，§18.1） |
+| P-05 | AUTH | 操作码明文硬编码 `api/auth.go:10` | 早期单机自用 | 环境变量注入 + 轮换 | 是 | OPEN（不在 #3 范围） |
+| P-06 | SAFETY | `DELETE /api/v1/trades` 无操作码保护（`api/routes.go:27`） | 注册时遗漏中间件 | 用 `RequireOperationCode` 包裹 | 是 | OPEN（不在 #3 范围） |
+| P-07 | API | Polymarket 发现逻辑的 4 条假设 | — | — | — | **已由实测替代**：slug 结构 / 前缀 / `15m` 子串 / outcomes 仍成立；`public-search` 不成立 → P-12 |
+| P-08 | BUILD | CGO 是否必需 | go-ethereum 有纯 Go 回退 | `CGO_ENABLED=0` 对照构建 | 否 | UNVERIFIED（本轮 `CGO_ENABLED=1` 构建成功） |
+| P-09 | CONFIG | Go 版本与 SHA256 | — | — | — | **CLOSED**（本轮再次独立核对 go.dev 一致） |
+| P-10 | CONFIG | `.env.example` 与代码字段双向偏差（§8.4） | 文档未随代码更新 | 同步字段清单 | 否 | OPEN |
+| P-11 | BUILD | Go 1.27.4 vs go.mod `go 1.24.1` | — | — | — | **CLOSED**（编译成功） |
+| **P-12** | API | `public-search q="<sym> updown 15m"&events_status=active` 返回 200 但不含任何 `*-updown-15m-*` 事件；`/markets?slug=<构造 slug>` 正常 | Polymarket 搜索索引不再收录短周期循环市场 | 发现逻辑改为直接按 slug 规则查询（即把现有回退升为主路径） | 是（业务代码） | OPEN |
+| **P-13** | API | `wss://fstream.binance.com/stream?streams=...` 101 但 30 s 0 消息；`/market/stream?streams=...` 338 条 | Binance USDⓈ-M 合约 WS 按 market/public/private 分路径，旧路径不再推送行情 | `src/binance_ws.go:16` 改为 `/market/stream?streams=`，并补一个“连上但无数据”的告警 | 是（业务代码） | OPEN |
+| **P-14** | BUILD-ENV | 第 1 次构建卡在 `resolve image config for docker/dockerfile:1` 704 s 后 `lease does not exist` | 与构建期间并发且被中断的 `docker pull` 有关，或 Docker Hub 瞬时故障 | 无需改动；若复现，可预先 `docker pull docker/dockerfile:1` 或去掉 `# syntax=` 行（Dockerfile 未用到新语法特性） | 否 | OBSERVED，重试即通过 |
+| **P-15** | DOMAIN | 15m 市场描述的结算来源为 Chainlink BTC/USD TWAP | — | 后续阶段评估策略参考价与结算口径是否一致 | — | OPEN（不在 #3 范围） |
+| **P-16** | EVIDENCE | `05b-isolation.txt` 的 `ENABLE_*` grep 正则错误 | 本人脚本失误 | 已在 §15 用其它证据补足 | 否 | NOTED |
+
+---
+
+## 20. 下一步
+
+### 20.1 等负责人决策
+
+1. **S11**：是否批准 §12 的最小模拟策略启停验证。不批准则 S11 保持 BLOCKED。
+2. **P-12 / P-13**：是否另立任务修复两处接口漂移（都需改业务代码，不在 #3 授权内）。
+   建议先修 P-13，否则 S11 即使获批也拿不到 Binance 实时数据。
+3. **PR #4 与本 PR 的合并顺序**：两者都改 `docs/engineering/CURRENT_STATUS.md`，会冲突。
+
+### 20.2 复现命令
+
+```bash
+docker build --platform linux/arm64 -t polymarket-engineering-lab:day0 .
+bash scripts/poc/day0-docker-smoke.sh offline     # S03–S06, S15
+bash scripts/poc/day0-docker-smoke.sh online      # 应用联网启动 + 宿主机侧外部探测
+bash scripts/poc/day0-docker-smoke.sh probe 30    # S07–S10 容器网络内探测（WS 计数）
+bash scripts/poc/day0-docker-smoke.sh observe 15  # S12
+bash scripts/poc/day0-docker-smoke.sh lifecycle   # S13–S14
+bash scripts/poc/day0-docker-smoke.sh teardown
+```
+
+### 20.3 证据清单（`reports/engineering/poc/evidence/`）
+
+| 文件 | 内容 |
+|---|---|
+| `00-execution-channel.txt` | 上一轮沙箱会话记录（历史，已被取代） |
+| `01-build-attempt1.txt` | 第 1 次构建（FAIL） |
+| `01-build.txt` | 第 2 次构建（PASS）完整日志 |
+| `01b-image-identity.txt` | 镜像 ID / 架构 / ENV / 内容检查 / Go 版本 / 依赖摘要 |
+| `02-offline-start.txt` | S03–S06、凭证检查 |
+| `03-online-market-data.txt` | 联网启动 + 宿主机侧探测 |
+| `03b-container-probe.txt` | 容器网络内 S07–S10 探测 |
+| `03c-discovery-fallback.txt` | Polymarket 回退路径 4 币种核查 |
+| `04-observe-15min.txt` | S12 |
+| `05-lifecycle.txt` | S13 / S14 |
+| `05b-isolation.txt` | S15 隔离证据 |
+| `06-teardown.txt` | 收尾 |
+
+证据仅含公开行情数据与本地命令输出，不含凭证。
+
+---
+
+## 21. 诚实声明
+
+- 所有 PASS 均对应 `evidence/` 中的真实命令输出；镜像 ID、时间、消息数均为实测值。
+- 第 1 次构建失败如实记录，未删除日志；其根因只是假设。
+- S09 的 PASS 明确限定为“经回退路径、外部层”；S12 的 PASS 明确限定为“空闲进程”。
+- 外部接口可达不等于应用功能可用：S11 未执行，标 BLOCKED。
+- 未修改业务代码、go.mod、go.sum；未为了让矩阵变绿而绕过任何限制。

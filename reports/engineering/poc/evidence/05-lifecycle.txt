@@ -1,0 +1,52 @@
+
+===== S13 GRACEFUL STOP (2026-11-28T08:39:23Z) =====
+$ docker stop -t 20 polymarket-lab-day0
+polymarket-lab-day0
+[exit=0]
+$ docker inspect polymarket-lab-day0 --format ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}} FinishedAt={{.State.FinishedAt}}
+ExitCode=0 OOMKilled=false Error= FinishedAt=2026-11-28T08:39:23.281711921Z
+[exit=0]
+期望 ExitCode=0（main.go:204-227 处理 SIGTERM 并优雅退出）
+$ docker logs polymarket-lab-day0 --tail 15
+2026/11/28 08:18:31 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:18:31 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:18:31 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0318.log
+2026/11/28 08:18:31 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:18:31 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:18:31 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 08:18:31 📝 API 测试页面: http://0.0.0.0:8090/api/
+2026/11/28 08:39:23 🛑 正在关闭服务器...
+2026/11/28 08:39:23 ✅ 服务器已优雅退出
+[exit=0]
+
+===== S14 RESTART FROM THE SAME IMAGE (fresh container, fresh temp DB) (2026-11-28T08:39:23Z) =====
+$ docker rm -f polymarket-lab-day0
+polymarket-lab-day0
+[exit=0]
+$ docker run -d --name polymarket-lab-day0 --platform linux/arm64 -p 127.0.0.1:8090:8090 -e TRADING_MODE=simulation -e ENABLE_MAIN_STRATEGY=false -e ENABLE_PATTERN_STRATEGY=false -e SNIPER_MODE=false -e CONFIG_FILE= -e PATTERN_CONFIG_FILE= -e TELEGRAM_BOT_TOKEN= -e POLYMARKET_PRIVATE_KEY= -e PROXY_WALLET_ADDRESS= -e MAKER_ADDRESS= -e POLY_API_KEY= -e POLY_API_SECRET= -e POLY_PASSPHRASE= -e POLY_EOA_ADDRESS= -e BUILDER_KEY= -e BUILDER_SECRET= -e BUILDER_PASSPHRASE= -e DB_PATH=/app/data/trades.db -e BOT_DB_PATH=/app/data/bot.db polymarket-engineering-lab:day0
+31026421a301788326dbab0ed26ae55fd6a9cc8a8e421b6d60ce95113218d182
+[exit=0]
+$ docker inspect polymarket-lab-day0 --format Running={{.State.Running}} ExitCode={{.State.ExitCode}}
+Running=true ExitCode=0
+[exit=0]
+$ curl -sS -o /dev/null -w health after restart -> http=%{http_code}\n --max-time 10 http://127.0.0.1:8090/health
+health after restart -> http=200
+[exit=0]
+$ docker exec polymarket-lab-day0 bash -c exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/sim-stats HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3
+HTTP/1.0 200 OK
+Content-Type: application/json
+Date: Sat, 28 Nov 2026 08:39:31 GMT
+Content-Length: 180
+
+{"success":true,"data":{"2":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0}},"summary":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0},"config_breakdown":{}}
+[exit=0]
+$ docker logs polymarket-lab-day0 --tail 25
+2026/11/28 08:39:23 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:39:23 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:39:23 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0339.log
+2026/11/28 08:39:23 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:39:23 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:39:23 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 08:39:23 📝 API 测试页面: http://0.0.0.0:8090/api/
+2026/11/28 08:39:31 📊 [GetTradeStats] 查询结果: count=0, pnl=0.00, win=0
+[exit=0]

@@ -1,0 +1,117 @@
+
+===== START WITH --network none (no external network, no creds) (2026-11-28T08:18:15Z) =====
+$ docker run -d --name polymarket-lab-day0-offline --platform linux/arm64 --network none -e TRADING_MODE=simulation -e ENABLE_MAIN_STRATEGY=false -e ENABLE_PATTERN_STRATEGY=false -e SNIPER_MODE=false -e CONFIG_FILE= -e PATTERN_CONFIG_FILE= -e TELEGRAM_BOT_TOKEN= -e POLYMARKET_PRIVATE_KEY= -e PROXY_WALLET_ADDRESS= -e MAKER_ADDRESS= -e POLY_API_KEY= -e POLY_API_SECRET= -e POLY_PASSPHRASE= -e POLY_EOA_ADDRESS= -e BUILDER_KEY= -e BUILDER_SECRET= -e BUILDER_PASSPHRASE= -e DB_PATH=/app/data/trades.db -e BOT_DB_PATH=/app/data/bot.db polymarket-engineering-lab:day0
+cef753e8e50475a06ee0ddcdb67002930470af4cfec32c014f001af9213e6b2f
+[exit=0]
+
+===== CONTAINER STATE (2026-11-28T08:18:23Z) =====
+$ docker ps -a --filter name=polymarket-lab-day0-offline --format {{.Names}} {{.Status}} {{.State}}
+polymarket-lab-day0-offline Up 8 seconds running
+[exit=0]
+$ docker inspect polymarket-lab-day0-offline --format Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOM={{.State.OOMKilled}} Restarts={{.RestartCount}}
+Running=true ExitCode=0 OOM=false Restarts=0
+[exit=0]
+
+===== APPLICATION LOG (2026-11-28T08:18:23Z) =====
+$ docker logs polymarket-lab-day0-offline
+2026/11/28 08:18:15 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:18:15 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:18:15 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0318.log
+2026/11/28 08:18:15 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:18:15 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:18:15 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 08:18:15 📝 API 测试页面: http://0.0.0.0:8090/api/
+[exit=0]
+
+===== S04 SQLITE FILES ON DISK (2026-11-28T08:18:23Z) =====
+$ docker exec polymarket-lab-day0-offline ls -la /app/data /app/logs
+/app/data:
+total 80
+drwxr-xr-x 1 app app  4096 Nov 28 08:18 .
+drwxr-xr-x 1 app app  4096 Nov 28 08:17 ..
+-rw-r--r-- 1 app app  4096 Nov 28 08:18 trades.db
+-rw-r--r-- 1 app app 32768 Nov 28 08:18 trades.db-shm
+-rw-r--r-- 1 app app 28872 Nov 28 08:18 trades.db-wal
+
+/app/logs:
+total 16
+drwxr-xr-x 1 app app 4096 Nov 28 08:18 .
+drwxr-xr-x 1 app app 4096 Nov 28 08:17 ..
+drwxr-xr-x 2 app app 4096 Nov 28 08:18 20261128
+[exit=0]
+
+===== S05 HEALTH ENDPOINT (in-container) (2026-11-28T08:18:23Z) =====
+$ docker exec polymarket-lab-day0-offline bash -c exec 3<>/dev/tcp/127.0.0.1/8090 || { echo "tcp connect failed"; exit 1; }; printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3
+HTTP/1.0 200 OK
+Content-Type: application/json
+Date: Sat, 28 Nov 2026 08:18:23 GMT
+Content-Length: 64
+
+{"service":"Polymarket15MinsCryptoArbitrageTool","status":"ok"}
+[exit=0]
+
+===== S04 SQLITE FUNCTIONAL READ via /api/v1/sim-stats (read-only, queries DB) (2026-11-28T08:18:23Z) =====
+$ docker exec polymarket-lab-day0-offline bash -c exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/sim-stats HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3
+HTTP/1.0 200 OK
+Content-Type: application/json
+Date: Sat, 28 Nov 2026 08:18:23 GMT
+Content-Length: 180
+
+{"success":true,"data":{"2":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0}},"summary":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0},"config_breakdown":{}}
+[exit=0]
+
+===== S06 WEB UI + READ-ONLY CONFIG API (2026-11-28T08:18:23Z) =====
+$ docker exec polymarket-lab-day0-offline bash -c exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -c 400 <&3
+HTTP/1.0 200 OK
+Accept-Ranges: bytes
+Content-Length: 1782
+Content-Type: text/html; charset=utf-8
+Last-Modified: Fri, 27 Nov 2026 06:31:56 GMT
+Date: Sat, 28 Nov 2026 08:18:23 GMT
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket 15-Min Crypto Arbitrage Tool</title>
+    <styl[exit=0]
+$ docker exec polymarket-lab-day0-offline bash -c exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/config HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -c 800 <&3
+HTTP/1.0 200 OK
+Content-Type: application/json
+Date: Sat, 28 Nov 2026 08:18:23 GMT
+Content-Length: 720
+
+{"success":true,"config_file":"strategy_config.yaml","groups":[{"id":"","min_trend_percent_up":0,"min_trend_percent_down":0,"trend_window_sec_start":0,"trend_window_sec_end":0,"leg0_share_price_0":0,"leg1_share_price_1":0,"leg1_share_price_2":0,"leg1_share_price_3":0,"leg1_share_amount_1":0,"leg1_share_amount_2":0,"leg1_share_amount_3":0,"max_slippage":0,"price_tick_size":0,"sigmoid_sensitivity":0,"volatility_btc":0,"volatility_eth":0,"volatility_sol":0,"volatility_xrp":0,"tier_0_z_score":0,"tier_1_z_score":0,"tier_2_z_score":0,"tier_3_z_score":0,"tier_4_z_score":0,"min_edge_tier_0":0,"min_edge_tier_1":0,"min_edge_tier_2":0,"min_edge_tier_3":0,"min_edge_tier_4":0}],"timestamp":"2026[exit=0]
+
+===== S15 CREDENTIAL / PROCESS SAFETY CHECK (2026-11-28T08:18:23Z) =====
+期望：以下三项全部为空/未设置
+$ docker exec polymarket-lab-day0-offline sh -c env | grep -E "^(POLYMARKET_PRIVATE_KEY|BUILDER_|POLY_API)" || echo "(no credential env values)"
+POLY_API_SECRET=
+BUILDER_PASSPHRASE=
+POLYMARKET_PRIVATE_KEY=
+BUILDER_SECRET=
+POLY_API_KEY=
+BUILDER_KEY=
+[exit=0]
+$ docker exec polymarket-lab-day0-offline sh -c ls -la /app; test -e /app/.env && echo "WARNING: .env present in image" || echo "OK: no .env in image"
+total 27292
+drwxr-xr-x 1 app  app      4096 Nov 28 08:17 .
+drwxr-xr-x 1 root root     4096 Nov 28 08:18 ..
+drwxr-xr-x 1 app  app      4096 Nov 28 08:18 data
+drwxr-xr-x 2 app  app      4096 Nov 27 06:31 front
+drwxr-xr-x 1 app  app      4096 Nov 28 08:18 logs
+-rwxr-xr-x 1 app  app  27900336 Nov 28 08:17 polymarket-tool
+-rw-r--r-- 1 app  app     10573 Nov 27 06:31 strategy_config_3_sim.yaml
+-rw-r--r-- 1 app  app      7775 Nov 27 06:31 strategy_config_sim.yaml
+OK: no .env in image
+[exit=0]
+$ docker exec polymarket-lab-day0-offline sh -c test -e /app/.env.example && echo "WARNING: .env.example present" || echo "OK: no .env.example in image"
+OK: no .env.example in image
+[exit=0]
+
+===== PROCESS USER (expect uid=10001 app, not root) (2026-11-28T08:18:23Z) =====
+$ docker exec polymarket-lab-day0-offline id
+uid=10001(app) gid=10001(app) groups=10001(app)
+[exit=0]
