@@ -1,6 +1,6 @@
 # M0 Day 0 — Docker 容器化与真实行情 Smoke Test
 
-**状态：PARTIAL — 容器化通过；外部行情 2 项 FAIL（接口漂移）；应用内部行情链路 BLOCKED（需授权）**
+**状态：PARTIAL — 容器化通过；Polymarket 全链路通过；Binance 合约 WS 不推送行情（S08 FAIL，S11 部分失败）**
 
 Refs #3 · Refs #2（#2 已 CLOSED / NOT_PLANNED）
 报告更新：2026-11-28 (UTC)
@@ -22,15 +22,16 @@ go.mod/go.sum 未变）；应用在无私钥、无凭证下启动，SQLite、`/h
    应用代码自带的回退路径（按 `<sym>-updown-15m-<UTC 15m 窗口>` 构造 slug 调 `/markets?slug=`）
    对 BTC/ETH/SOL/XRP 均返回有效市场。→ S09 **PASS（经回退路径）**，主路径失效登记为 P-12。
 
-S11（应用内部行情状态更新）在架构上必须启动模拟策略（`POST /api/v1/sim-copy-trading`）才能达成，
-未获授权，保持 **BLOCKED**。
+S11（应用内部行情状态更新）经负责人批准后执行了一次模拟启停（§12）：Polymarket 侧应用内部发现 4 个市场、
+订阅 8 个资产、回调持续增长 → 通过；Binance 侧应用内部 60 秒无消息触发“连接僵死”重连 → 在应用内复现 P-13。
+S11 记为 **PARTIAL**。P-13 / P-12 已分别登记为 Issue #6 / #7。
 
 ---
 
 ## 1. 任务背景与本轮变更
 
 Issue #3 的核心目标：证明现有 Go 系统能在 Ubuntu Docker 容器中构建、启动、处理真实公开行情。
-本阶段不做性能优化、不建 Benchmark、不重构业务架构。状态词：PASS / FAIL / BLOCKED / NOT_RUN / UNVERIFIED。
+本阶段不做性能优化、不建 Benchmark、不重构业务架构。状态词：PASS / FAIL / PARTIAL / BLOCKED / NOT_RUN / UNVERIFIED。
 
 本轮（负责人 2026-11-28 决策）：
 
@@ -336,7 +337,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
 
 结论：网络可达、服务端可推送；**应用使用的合约 WS 路径不再推送行情**，而 `/market/stream` 路径正常推送。
 这与“合约 WS 按 market / public / private 分路径”的端点迁移相符（**根因假设**，未查阅官方公告核实）。
-修复需改 `src/binance_ws.go:16`（业务代码），本阶段不改 → **S08 FAIL**，登记 P-13。
+修复需改 `src/binance_ws.go:16`（业务代码），本阶段不改 → **S08 FAIL**，登记 P-13（Issue #6）。
 
 宿主机 curl 的 WS 握手测试返回 `000`（超时 exit=28），这是 curl 的 HTTP Upgrade 测试方式不适用，以容器内 gorilla/websocket 结果为准。
 
@@ -359,20 +360,34 @@ Running=true ExitCode=0 OOM=false Restarts=0
 
 ## 12. 应用内部行情集成（S11 / A03）
 
-**BLOCKED（需授权）。** 本轮实测与静态结论一致：在不启动策略的前提下，应用运行 15 分钟内日志中
-没有任何 MarketManager / Binance WS 相关行（§13），内部行情状态不会更新。
+**PARTIAL。** 负责人于 2026-11-28 批准最小模拟启停验证，证据 `evidence/07-s11-app-integration.txt`。
 
-所有行情能力都在 `runSimulationLoop()` 内部创建：Polymarket `MarketManager`（`api/strategy.go:373-387`）、
-Binance `BinanceKlineClient`（`api/strategy.go:396-407`），只能经 `StartSimulation()` 触发，其唯一 HTTP 入口为
-`POST /api/v1/sim-copy-trading`（需操作码）。另一条启动路径（`ENABLE_PATTERN_STRATEGY=true` + 配置文件）
-会自动拉起 Pattern 策略，同样属于策略执行。
+执行方式：同一镜像新容器 `polymarket-lab-day0-s11`（`-p 127.0.0.1:8091:8090`），环境与其它测试完全相同
+（`TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、`ENABLE_PATTERN_STRATEGY=false`、凭证全空，容器内 `env` 已核对）。
+操作码从源码读入 shell 变量，经 `X-Operation-Code` 头传入，**未写入证据或报告**（已 grep 核实证据文件中不含该值）。
 
-最小验证方案（**仍待负责人批准，未执行**）：保持 `TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、
-凭证全空，调用一次 `POST /api/v1/sim-copy-trading?type=2`，观察 60–120 秒日志后 `POST /api/v1/sim-stop-trading`。
-副作用：可能在临时 `simulation_trades` 表写入模拟成交。
+| 时间 (UTC) | 事件 |
+|---|---|
+| 09:18:51 | 无操作码 `POST /api/v1/sim-copy-trading?type=2` → **401**（鉴权生效） |
+| 09:18:51 | 带操作码同请求 → 200 `Started Simulation (Background)`，`config_count=1` |
+| 09:18:51 | 日志：`Main 策略已禁用 … 仅维护市场状态`、`已初始化只读 ClobClient (用于模拟盘订单簿验证)`、`Pattern 策略未启用` |
+| 09:18:52–53 | Binance WS 已连接；REST 预加载 BTC/ETH/SOL/XRP 1m K 线各 240 根 |
+| 09:18:59–09:19:02 | MarketManager 检测到 8 个资产（4 个市场），REST 快照 8/8 成功，订阅 Polymarket WS（market + book） |
+| 09:19:15 | **Polymarket WS 被服务端关闭 `close 1013: slow consumer: send buffer full`**；2 s 后重连，快照 8/8 → 重新订阅成功 |
+| 09:19:25 / 09:19:55 / 09:20:25 | 心跳：`活跃市场: 4`、回调数 42,934 → 135,024 → 203,140 |
+| 09:19:53 | **`[Binance] 连接僵死，60秒未收到消息，正在触发重连`**；重连“成功”后仍为同一 URL |
+| 09:20:51 | `POST /api/v1/sim-stop-trading` → 200；MarketManager 与 Binance WS 均已关闭，“模拟循环已确认退出” |
+| 09:20:54 | `sim-stats` trade_count=0（前后一致，未产生任何模拟成交） |
+| 结束 | `docker stop` → ExitCode=0 |
 
-**根据 §11 的结果，预期该验证会暴露 P-13**：Binance 合约 WS 路径 0 消息，应用内部 Binance 数据大概率为空；
-Polymarket 侧预期经回退路径发现市场。这只是预测，未实测，不作为结论。
+结论：
+
+- **Polymarket 应用内部链路：PASS。** 市场发现（经回退路径，主路径失效见 P-12 / #7）→ 订单簿快照 → WS 订阅 → 状态回调持续更新。
+- **Binance 应用内部链路：FAIL。** REST 预加载正常，WS 连上但无消息，60 秒僵死检测触发，与 §11.1 的外部探测一致（P-13 / #6）。
+  心跳仍报告 `Binance: 已连接`，健康状态具有误导性。
+- 新发现 P-17：Polymarket WS 在订阅 8 个资产后约 13 秒即因 slow consumer 被服务端断开，说明应用读取 / 处理速度跟不上推送量；
+  本次自动重连成功，但长时间运行下的频率未观察。
+- 全程 0 笔模拟成交（Main 策略处于被动模式），未触及任何真实下单路径。
 
 ## 13. 连续运行（S12）
 
@@ -434,13 +449,13 @@ Polymarket 侧预期经回退路径发现市场。这只是预测，未实测，
 | S08 | Binance WebSocket 行情 | **FAIL** | 应用 URL 形态 101 + 0 消息/30 s；`/market/stream` 338 条/30 s（P-13，需改业务代码） |
 | S09 | Polymarket 市场发现 | **PASS（回退路径）** | `public-search` 主路径不再返回 15m（P-12）；`/markets?slug=` 回退形态 4/4 币种命中 |
 | S10 | Polymarket 订单簿 REST / WS | **PASS** | book 200（23/76 档）；WS 101 + 9453 条/30 s |
-| S11 | 应用内部行情接收及状态更新 | **BLOCKED** | 需启动模拟策略，未获授权（§12） |
+| S11 | 应用内部行情接收及状态更新 | **PARTIAL** | 已获批执行（§12）：Polymarket 内部链路 PASS；Binance 内部 WS 60 s 无消息 FAIL（#6） |
 | S12 | 连续运行观察 | **PASS（空闲进程）** | 15 分 17 秒，15/15 健康，0 重启 |
 | S13 | 容器正常停止 | **PASS** | ExitCode=0，优雅退出日志 |
 | S14 | 相同镜像重新启动 | **PASS** | 新容器启动、健康、查库正常 |
 | S15 | 资金、凭证及生产数据安全 | **PASS** | §15 |
 
-合计：PASS 12（S09、S12 带限定）· FAIL 1（S08）· BLOCKED 1（S11）· 未执行 0。
+合计：PASS 12（S09、S12 带限定）· FAIL 1（S08）· PARTIAL 1（S11）· 未执行 0。
 
 ---
 
@@ -450,7 +465,7 @@ Polymarket 侧预期经回退路径发现市场。这只是预测，未实测，
 |---|---|---|---|
 | A01 | 应用是否支持无私钥启动 | **支持（实测）** | §9 |
 | A02 | 公开行情是否依赖交易认证 | **不依赖认证，但依赖策略启动** | 模拟模式用 dummy key 构造只读客户端（`api/strategy.go:235-245`）；外部行情接口全部匿名可用（§11） |
-| A03 | 行情与交易模块是否强耦合 | **存在（实测确认）** | 15 分钟运行无任何行情组件启动；只能经 `StartSimulation` 拉起（§12） |
+| A03 | 行情与交易模块是否强耦合 | **存在（实测确认）** | 15 分钟空闲运行无任何行情组件启动；经 `StartSimulation` 拉起后行情组件才出现（§12） |
 | A04 | 是否需要独立测试钱包 | **不需要** | 本轮未生成任何钱包 |
 | A05 | SQLite 驱动及部署方式 | `modernc.org/sqlite` v1.41.0，纯 Go，进程内嵌（实测可用） | §7、§9 |
 | A06 | 原项目 API 是否存在兼容性问题 | **存在（实测）** | P-12 Polymarket 搜索漂移；P-13 Binance 合约 WS 路径漂移；P-15 结算口径变化 |
@@ -552,22 +567,23 @@ Polymarket 侧预期经回退路径发现市场。这只是预测，未实测，
 | P-09 | CONFIG | Go 版本与 SHA256 | — | — | — | **CLOSED**（本轮再次独立核对 go.dev 一致） |
 | P-10 | CONFIG | `.env.example` 与代码字段双向偏差（§8.4） | 文档未随代码更新 | 同步字段清单 | 否 | OPEN |
 | P-11 | BUILD | Go 1.27.4 vs go.mod `go 1.24.1` | — | — | — | **CLOSED**（编译成功） |
-| **P-12** | API | `public-search q="<sym> updown 15m"&events_status=active` 返回 200 但不含任何 `*-updown-15m-*` 事件；`/markets?slug=<构造 slug>` 正常 | Polymarket 搜索索引不再收录短周期循环市场 | 发现逻辑改为直接按 slug 规则查询（即把现有回退升为主路径） | 是（业务代码） | OPEN |
-| **P-13** | API | `wss://fstream.binance.com/stream?streams=...` 101 但 30 s 0 消息；`/market/stream?streams=...` 338 条 | Binance USDⓈ-M 合约 WS 按 market/public/private 分路径，旧路径不再推送行情 | `src/binance_ws.go:16` 改为 `/market/stream?streams=`，并补一个“连上但无数据”的告警 | 是（业务代码） | OPEN |
+| **P-12** | API | `public-search q="<sym> updown 15m"&events_status=active` 返回 200 但不含任何 `*-updown-15m-*` 事件；`/markets?slug=<构造 slug>` 正常 | Polymarket 搜索索引不再收录短周期循环市场 | 发现逻辑改为直接按 slug 规则查询（即把现有回退升为主路径） | 是（业务代码） | OPEN → **Issue #7** |
+| **P-13** | API | `wss://fstream.binance.com/stream?streams=...` 101 但 30 s 0 消息；`/market/stream?streams=...` 338 条 | Binance USDⓈ-M 合约 WS 按 market/public/private 分路径，旧路径不再推送行情 | `src/binance_ws.go:16` 改为 `/market/stream?streams=`，并补一个“连上但无数据”的告警 | 是（业务代码） | OPEN → **Issue #6**（S11 已在应用内复现） |
 | **P-14** | BUILD-ENV | 第 1 次构建卡在 `resolve image config for docker/dockerfile:1` 704 s 后 `lease does not exist` | 与构建期间并发且被中断的 `docker pull` 有关，或 Docker Hub 瞬时故障 | 无需改动；若复现，可预先 `docker pull docker/dockerfile:1` 或去掉 `# syntax=` 行（Dockerfile 未用到新语法特性） | 否 | OBSERVED，重试即通过 |
 | **P-15** | DOMAIN | 15m 市场描述的结算来源为 Chainlink BTC/USD TWAP | — | 后续阶段评估策略参考价与结算口径是否一致 | — | OPEN（不在 #3 范围） |
+| **P-17** | PERF | S11 中 Polymarket 市场 WS 订阅 8 个资产约 13 s 后被服务端 `close 1013: slow consumer: send buffer full` 断开，自动重连成功 | 读取循环与回调处理串行，处理速度跟不上推送量 | 读循环与处理解耦（带缓冲通道）；先做长时间观察量化断连频率 | 是（业务代码） | OPEN（已在 #7 中提及） |
 | **P-16** | EVIDENCE | `05b-isolation.txt` 的 `ENABLE_*` grep 正则错误 | 本人脚本失误 | 已在 §15 用其它证据补足 | 否 | NOTED |
 
 ---
 
 ## 20. 下一步
 
-### 20.1 等负责人决策
+### 20.1 状态与待决策
 
-1. **S11**：是否批准 §12 的最小模拟策略启停验证。不批准则 S11 保持 BLOCKED。
-2. **P-12 / P-13**：是否另立任务修复两处接口漂移（都需改业务代码，不在 #3 授权内）。
-   建议先修 P-13，否则 S11 即使获批也拿不到 Binance 实时数据。
-3. **PR #4 与本 PR 的合并顺序**：两者都改 `docs/engineering/CURRENT_STATUS.md`，会冲突。
+1. ~~S11 授权~~：已批准并执行（§12）。
+2. ~~P-12 / P-13 立项~~：已提交 Issue #7 / #6。建议先修 #6，修复后重跑 S08 / S11。
+3. **PR #4 与 PR #5 的合并顺序**：两者都改 `docs/engineering/CURRENT_STATUS.md`，会冲突，待负责人决定。
+4. P-17（slow consumer）是否单独立项，待负责人决定。
 
 ### 20.2 复现命令
 
@@ -597,6 +613,7 @@ bash scripts/poc/day0-docker-smoke.sh teardown
 | `05-lifecycle.txt` | S13 / S14 |
 | `05b-isolation.txt` | S15 隔离证据 |
 | `06-teardown.txt` | 收尾 |
+| `07-s11-app-integration.txt` | S11 获批模拟启停（操作码已脱敏） |
 
 证据仅含公开行情数据与本地命令输出，不含凭证。
 
@@ -607,5 +624,5 @@ bash scripts/poc/day0-docker-smoke.sh teardown
 - 所有 PASS 均对应 `evidence/` 中的真实命令输出；镜像 ID、时间、消息数均为实测值。
 - 第 1 次构建失败如实记录，未删除日志；其根因只是假设。
 - S09 的 PASS 明确限定为“经回退路径、外部层”；S12 的 PASS 明确限定为“空闲进程”。
-- 外部接口可达不等于应用功能可用：S11 未执行，标 BLOCKED。
+- 外部接口可达不等于应用功能可用：S11 单独在应用内部验证，结果按 Polymarket / Binance 分别记录。
 - 未修改业务代码、go.mod、go.sum；未为了让矩阵变绿而绕过任何限制。
