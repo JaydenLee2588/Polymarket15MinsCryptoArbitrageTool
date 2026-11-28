@@ -82,7 +82,7 @@ Issue #3 的核心目标：证明现有 Go 系统能在 Ubuntu Docker 容器中�
 | 项目 | 实测值 |
 |---|---|
 | `origin/main` | `492ee885d5042ec60539c09ca38c9a7754c81070`（`git fetch` 后核实；PR #1 合并点） |
-| PR #4 `docs/m0-day0-poc-status` | **OPEN，未合并**（head `178b1bdabe3512d77d0a5157a0fea6d01304ae5b`），未代为合并 |
+| PR #4 `docs/m0-day0-poc-status` | 核查时 OPEN、未合并（head `178b1bdabe3512d77d0a5157a0fea6d01304ae5b`）；2026-11-28 按负责人决策**关闭为已被 PR #5 取代**，未合并，远端分支保留 |
 | Issue #3 | OPEN |
 | Issue #2 | CLOSED / not_planned |
 | 新分支 | `poc/m0-day0-docker-smoke`，`git switch -c ... origin/main`；未跟踪 Day 0 文件随工作树带入 |
@@ -91,7 +91,7 @@ Issue #3 的核心目标：证明现有 Go 系统能在 Ubuntu Docker 容器中�
 | 额外 worktree | 无（`git worktree list` 仅主目录） |
 | 新分支中 `reports/engineering/baseline/` | 不存在（已核实） |
 
-注意：PR #4 与本分支都修改了 `docs/engineering/CURRENT_STATUS.md`，先合并哪一个，另一个都会产生冲突，需负责人决定保留版本。
+PR #4 已关闭，不再存在合并冲突问题；`CURRENT_STATUS.md` 以本分支版本为准。
 
 ---
 
@@ -582,7 +582,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
 
 1. ~~S11 授权~~：已批准并执行（§12）。
 2. ~~P-12 / P-13 立项~~：已提交 Issue #7 / #6。建议先修 #6，修复后重跑 S08 / S11。
-3. **PR #4 与 PR #5 的合并顺序**：两者都改 `docs/engineering/CURRENT_STATUS.md`，会冲突，待负责人决定。
+3. ~~PR #4 与 PR #5 的合并顺序~~：PR #4 已关闭为被 #5 取代；PR #5 待独立审查后由负责人决定合并。
 4. P-17（slow consumer）是否单独立项，待负责人决定。
 
 ### 20.2 复现命令
