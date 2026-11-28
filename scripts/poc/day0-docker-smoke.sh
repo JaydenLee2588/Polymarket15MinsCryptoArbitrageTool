@@ -2,53 +2,66 @@
 # =============================================================================
 # M0 Day 0 — Docker Smoke Test 执行脚本 (Refs #3)
 #
-# 在 macOS 宿主机终端运行（Docker Desktop 必须已启动）：
-#   cd <repo>
-#   bash scripts/poc/day0-docker-smoke.sh preflight
-#   bash scripts/poc/day0-docker-smoke.sh build
-#   bash scripts/poc/day0-docker-smoke.sh offline
-#   bash scripts/poc/day0-docker-smoke.sh online
-#   bash scripts/poc/day0-docker-smoke.sh probe 30
-#   bash scripts/poc/day0-docker-smoke.sh observe 20
-#   bash scripts/poc/day0-docker-smoke.sh lifecycle
-#   bash scripts/poc/day0-docker-smoke.sh teardown
+# 在 macOS 宿主机终端运行（Docker Desktop 必须已启动）。
+# 一次实验 = 一个 RUN_ID = 一个独立证据目录：
 #
-# 所有证据写入 reports/engineering/poc/evidence/*.txt
-# （用 .txt 而非 .log，因为 .gitignore 含 *.log 规则）
+#   export RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+#   bash scripts/poc/day0-docker-smoke.sh preflight
+#   bash scripts/poc/day0-docker-smoke.sh build       # 失败即停止，后续步骤拒绝执行
+#   bash scripts/poc/day0-docker-smoke.sh offline     # S03–S06 + safety
+#   bash scripts/poc/day0-docker-smoke.sh online      # 联网启动 + 宿主机侧诊断探测
+#   bash scripts/poc/day0-docker-smoke.sh probe 30    # S07–S10 容器网络内探测
+#   bash scripts/poc/day0-docker-smoke.sh observe 15  # S12（空闲进程）
+#   bash scripts/poc/day0-docker-smoke.sh lifecycle   # S13–S14
+#   bash scripts/poc/day0-docker-smoke.sh teardown
+#   # 或一次性：bash scripts/poc/day0-docker-smoke.sh all
+#
+# 覆盖范围：S01–S10、S12–S15。S11（获批模拟启停）不在本脚本内，见报告 §12 / §20.2。
+#
+# 证据：reports/engineering/poc/evidence/runs/<RUN_ID>/*.txt
+#   - 已有证据文件绝不覆盖（存在即拒绝写入）。
+#   - 拒绝把证据直接写进 reports/engineering/poc/evidence/（历史证据目录）。
+#   - 用 .txt 而非 .log（.gitignore 含 *.log）。
+#
+# 退出码：
+#   0  所有断言通过
+#   1  断言失败 / 关键命令失败
+#   2  用法错误
+#   3  安全拒绝（容器归属不符、证据会被覆盖、未在本轮构建镜像等）
 #
 # 安全边界（脚本强制，勿删）：
-#   - 不加载 .env / .env.example
-#   - 不传入任何私钥或交易凭证
+#   - 不加载 .env / .env.example；不传入任何私钥或交易凭证
 #   - TRADING_MODE=simulation / ENABLE_MAIN_STRATEGY=false / ENABLE_PATTERN_STRATEGY=false
-#   - 端口只绑定 127.0.0.1
-#   - 不挂载宿主目录、不挂载 docker socket、不使用 --privileged
-#   - 不调用任何写入型接口（DELETE /api/v1/trades、PUT /api/v1/config、
-#     /api/v1/sim-copy-trading 等一律不碰）
+#   - 端口只绑定 127.0.0.1；不挂载宿主目录 / docker socket；不使用 --privileged
+#   - 不调用任何写入型或策略启动接口
+#   - 只 stop / rm 带本实验 label 且属于当前 RUN_ID 的容器
+#   - 凭证检查只输出 EMPTY / SET / UNSET，不输出值
 # =============================================================================
 set -uo pipefail
 
-IMAGE="${IMAGE:-polymarket-engineering-lab:day0}"
-CONTAINER="${CONTAINER:-polymarket-lab-day0}"
 PLATFORM="${PLATFORM:-linux/arm64}"
+IMAGE_TAG="${IMAGE_TAG:-polymarket-engineering-lab:day0}"
 GO_VERSION="${GO_VERSION:-1.27.4}"
 GO_SHA256="${GO_SHA256:-3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92}"
 HOST_PORT="${HOST_PORT:-8090}"
-EV="reports/engineering/poc/evidence"
-mkdir -p "$EV"
 
-ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
-hdr() { echo; echo "===== $* ($(ts)) ====="; }
-run() { echo "\$ $*"; "$@" 2>&1; echo "[exit=$?]"; }
+LEGACY_EVIDENCE_DIR="reports/engineering/poc/evidence"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$LEGACY_EVIDENCE_DIR/runs}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+EV="${EVIDENCE_DIR:-$EVIDENCE_ROOT/$RUN_ID}"
 
-need_docker() {
-  if ! docker version >/dev/null 2>&1; then
-    echo "FATAL: Docker daemon 不可达。请先启动 Docker Desktop。" >&2
-    exit 1
-  fi
-}
+LABEL_EXP_KEY="org.polymarket-lab.experiment"
+LABEL_EXP_VAL="m0-day0-smoke"
+LABEL_RUN_KEY="org.polymarket-lab.run"
 
-# --- 本次实验的运行时环境（唯一来源，勿分叉） --------------------------------
-# 注意：用普通数组而非 mapfile，以兼容 macOS 自带的 bash 3.2
+CONTAINER="polymarket-lab-day0-${RUN_ID}"
+C_OFFLINE="${CONTAINER}-offline"
+C_PROBE="${CONTAINER}-probe"
+
+# 不得为空的凭证类变量名（只检查是否为空，绝不打印值）
+CRED_VARS="POLYMARKET_PRIVATE_KEY PROXY_WALLET_ADDRESS MAKER_ADDRESS POLY_API_KEY POLY_API_SECRET POLY_PASSPHRASE POLY_EOA_ADDRESS BUILDER_KEY BUILDER_SECRET BUILDER_PASSPHRASE TELEGRAM_BOT_TOKEN"
+
+# --- 本次实验的运行时环境（唯一来源，勿分叉；bash 3.2 兼容，不用 mapfile） ---
 LAB_ENV=(
   -e TRADING_MODE=simulation
   -e ENABLE_MAIN_STRATEGY=false
@@ -72,258 +85,402 @@ LAB_ENV=(
 )
 
 # =============================================================================
-cmd_preflight() {
-  local out="$EV/00-preflight.txt"
-  {
-    hdr "HOST"
-    run uname -a
-    run sw_vers
-    hdr "GIT BASELINE"
-    run git rev-parse --show-toplevel
-    run git branch --show-current
-    run git rev-parse HEAD
-    run git status --short
-    hdr "DEPENDENCY DECLARATION DIGEST (before build)"
-    run shasum -a 256 go.mod go.sum
-    hdr "DOCKER"
-    run docker version
-    run docker context show
-    run docker info
-  } | tee "$out"
-  echo "-> $out"
+# 基础工具
+# =============================================================================
+ts()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
+hdr()  { echo; echo "===== $* ($(ts)) ====="; }
+die()  { local rc="$1"; shift; echo "FATAL[$rc]: $*" >&2; exit "$rc"; }
+
+# run: 执行命令，打印输出与真实退出码，并把退出码原样返回（R04）
+run() {
+  echo "\$ $*"
+  "$@" 2>&1
+  local rc=$?
+  echo "[exit=$rc]"
+  return "$rc"
 }
 
-cmd_build() {
+# must: 关键步骤，失败即终止当前步骤（R04）
+must() {
+  run "$@"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "STEP FAILED: '$*' exited $rc — 停止本步骤。"
+    exit "$rc"
+  fi
+}
+
+# diag: 诊断性命令，允许预期内失败；只记录不传播（R04：诊断失败单独处理）
+diag() {
+  run "$@"
+  local rc=$?
+  [ "$rc" -ne 0 ] && echo "[diagnostic only — non-zero exit recorded, not treated as step failure]"
+  return 0
+}
+
+# check: 断言，失败时记录并累计，不立即退出
+FAILS=0
+check() {
+  local desc="$1"; shift
+  if "$@"; then echo "CHECK PASS: $desc"; else echo "CHECK FAIL: $desc"; FAILS=$((FAILS+1)); fi
+}
+finish_checks() {
+  if [ "$FAILS" -ne 0 ]; then echo "RESULT: $FAILS check(s) failed"; exit 1; fi
+  echo "RESULT: all checks passed"
+}
+
+need_docker() {
+  docker version >/dev/null 2>&1 || die 1 "Docker daemon 不可达。请先启动 Docker Desktop。"
+}
+
+# --- 证据目录保护（R05） ----------------------------------------------------
+init_evidence() {
+  case "$RUN_ID" in
+    *[!A-Za-z0-9_.-]*|"") die 2 "RUN_ID 只能包含字母、数字、_ . -：'$RUN_ID'" ;;
+  esac
+  local ev_abs legacy_abs
+  mkdir -p "$EV" || die 1 "无法创建证据目录 $EV"
+  ev_abs="$(cd "$EV" && pwd -P)"
+  legacy_abs="$(cd "$LEGACY_EVIDENCE_DIR" 2>/dev/null && pwd -P || echo "")"
+  if [ -n "$legacy_abs" ] && [ "$ev_abs" = "$legacy_abs" ]; then
+    die 3 "拒绝写入历史证据目录 ${LEGACY_EVIDENCE_DIR}（请使用 runs/<RUN_ID>/）"
+  fi
+}
+
+# evidence_path <name>：返回新证据文件路径；文件已存在则拒绝（不覆盖）
+evidence_path() {
+  local f="$EV/$1"
+  if [ -e "$f" ]; then
+    die 3 "证据文件已存在，拒绝覆盖：${f}（换一个 RUN_ID 开始新一轮）"
+  fi
+  printf '%s\n' "$f"
+}
+
+# step <evidence-name> <function> [args...]：把一个步骤的输出写入新证据文件并传播退出码
+step() {
+  local name="$1"; shift
+  local out
+  out="$(evidence_path "$name")" || exit $?
+  { echo "RUN_ID=$RUN_ID"; "$@"; } 2>&1 | tee "$out"
+  local rc=${PIPESTATUS[0]}
+  echo "-> $out (exit=$rc)"
+  return "$rc"
+}
+
+# --- 本轮构建产物（R04：不得把旧镜像当新构建） --------------------------------
+built_image_id() {
+  local f="$EV/image.iid"
+  [ -s "$f" ] || die 3 "本轮（RUN_ID=${RUN_ID}）没有成功构建的镜像（缺少 ${f}）。先执行 build；不会回退使用已有标签 ${IMAGE_TAG}。"
+  cat "$f"
+}
+
+# --- 容器归属（R05） --------------------------------------------------------
+container_exists() { docker container inspect "$1" >/dev/null 2>&1; }
+
+label_of() {
+  docker container inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null
+}
+
+# assert_owned <name>：容器必须带本实验 label 且属于当前 RUN_ID，否则拒绝（退出 3）
+assert_owned() {
+  local name="$1" exp run_lbl
+  exp="$(label_of "$name" "$LABEL_EXP_KEY")"
+  run_lbl="$(label_of "$name" "$LABEL_RUN_KEY")"
+  if [ "$exp" != "$LABEL_EXP_VAL" ] || [ "$run_lbl" != "$RUN_ID" ]; then
+    echo "REFUSE: 容器 $name 不属于本实验（$LABEL_EXP_KEY='$exp', $LABEL_RUN_KEY='$run_lbl', 期望 '$LABEL_EXP_VAL' / '$RUN_ID'）。未执行任何 stop/rm。"
+    exit 3
+  fi
+}
+
+safe_rm() {
+  local name="$1"
+  container_exists "$name" || { echo "(container $name absent — nothing to remove)"; return 0; }
+  assert_owned "$name"
+  must docker rm -f "$name"
+}
+
+safe_stop() {
+  local name="$1"
+  container_exists "$name" || { echo "(container $name absent — nothing to stop)"; return 0; }
+  assert_owned "$name"
+  must docker stop -t 20 "$name"
+}
+
+# 启动实验容器：新名称必须空闲或属于本轮；总是带实验 label
+start_container() {
+  local name="$1"; shift
+  safe_rm "$name"
+  must docker run -d --name "$name" --platform "$PLATFORM" \
+      --label "$LABEL_EXP_KEY=$LABEL_EXP_VAL" --label "$LABEL_RUN_KEY=$RUN_ID" \
+      "$@"
+}
+
+# 容器内 HTTP GET（/dev/tcp），状态行含 " 200 " 才返回 0
+http_in() {
+  local name="$1" path="$2" limit="${3:-2000}"
+  docker exec "$name" bash -c '
+    exec 3<>/dev/tcp/127.0.0.1/8090 || { echo "tcp connect failed"; exit 1; }
+    printf "GET '"$path"' HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3
+    IFS= read -r status <&3
+    echo "$status"
+    head -c '"$limit"' <&3; echo
+    case "$status" in *" 200 "*) exit 0;; *) exit 1;; esac'
+}
+
+is_running() { [ "$(docker container inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]; }
+
+# =============================================================================
+# 步骤
+# =============================================================================
+do_preflight() {
+  hdr "HOST"
+  run uname -a
+  diag sw_vers
+  hdr "GIT BASELINE"
+  run git rev-parse --show-toplevel
+  run git branch --show-current
+  run git rev-parse HEAD
+  run git status --short
+  hdr "DEPENDENCY DECLARATION DIGEST (before build)"
+  must shasum -a 256 go.mod go.sum
+  hdr "DOCKER"
+  must docker version
+  run docker context show
+}
+
+do_build() {
   need_docker
-  local out="$EV/01-build.txt"
-  # Go 版本与官方 SHA256 已在 Dockerfile 中固定；此处显式再传一次，
-  # 让构建日志把实际使用的值记录下来（Evidence First）。
-  local args=( build --platform "$PLATFORM" --progress=plain
-               --build-arg "GO_VERSION=$GO_VERSION"
-               --build-arg "GO_SHA256=$GO_SHA256"
-               -t "$IMAGE" . )
-  {
-    hdr "BUILD COMMAND"
-    echo "docker ${args[*]}"
-    echo "GO_VERSION=$GO_VERSION"
-    echo "GO_SHA256=$GO_SHA256"
-    echo "期望在下方日志中看到: [go-toolchain] checksum VERIFIED -> 允许解压"
-    hdr "BUILD START"
-    local t0 t1 rc
-    t0=$(date +%s)
-    docker "${args[@]}" 2>&1
-    rc=$?
-    t1=$(date +%s)
-    echo "[build exit=$rc elapsed=$((t1-t0))s]"
-    if [ "$rc" -ne 0 ]; then
-      echo "BUILD FAILED -> 后续步骤不要继续，把本文件内容贴回去做诊断。"
-    fi
-    hdr "TOOLCHAIN INTEGRITY CHECK (grep from build log above)"
-    echo "（人工确认：checksum VERIFIED 出现过，且没有出现 FATAL）"
-    hdr "IMAGE IDENTITY"
-    run docker image inspect "$IMAGE" --format '{{.Id}}'
-    run docker image inspect "$IMAGE" --format 'Arch={{.Architecture}} OS={{.Os}} Variant={{.Variant}}'
-    run docker image inspect "$IMAGE" --format 'Size={{.Size}} Created={{.Created}}'
-    hdr "BASE IMAGE / ARCH INSIDE IMAGE (确认 arm64 原生，非 AMD64 模拟)"
-    run docker run --rm --platform "$PLATFORM" --entrypoint /bin/sh "$IMAGE" -c 'head -3 /etc/os-release; echo "---"; id; echo "---"; uname -m'
-    hdr "GO VERSION USED IN BUILDER STAGE"
-    run docker build --platform "$PLATFORM" --target builder -t "$IMAGE-builder" .
-    run docker run --rm --platform "$PLATFORM" --entrypoint /usr/local/go/bin/go "$IMAGE-builder" version
-    hdr "DEPENDENCY DECLARATION DIGEST (after build)"
-    run shasum -a 256 go.mod go.sum
-    echo "必须与 00-preflight.txt 中 build 前的摘要完全一致。"
-  } | tee "$out"
-  echo "-> $out"
+  local iid="$EV/image.iid.tmp" t0 t1 rc
+  hdr "BUILD (fresh image ID captured with --iidfile; existing tag never reused)"
+  echo "GO_VERSION=$GO_VERSION"
+  echo "GO_SHA256=$GO_SHA256"
+  t0=$(date +%s)
+  run docker build --platform "$PLATFORM" --progress=plain \
+      --build-arg "GO_VERSION=$GO_VERSION" --build-arg "GO_SHA256=$GO_SHA256" \
+      --iidfile "$iid" -t "$IMAGE_TAG" .
+  rc=$?
+  t1=$(date +%s)
+  echo "[build exit=$rc elapsed=$((t1-t0))s]"
+  if [ "$rc" -ne 0 ] || [ ! -s "$iid" ]; then
+    rm -f "$iid"
+    echo "BUILD FAILED — 验收停止。不检查、不使用任何已有镜像（包括标签 $IMAGE_TAG 指向的旧镜像）。"
+    [ "$rc" -ne 0 ] && exit "$rc"
+    exit 1
+  fi
+  mv "$iid" "$EV/image.iid"
+  local id; id="$(cat "$EV/image.iid")"
+  echo "BUILT IMAGE ID (this run): $id"
+  hdr "IMAGE IDENTITY (by ID, not by tag)"
+  must docker image inspect "$id" --format 'Id={{.Id}} Arch={{.Architecture}} Os={{.Os}} Size={{.Size}} Created={{.Created}}'
+  check "image architecture is arm64" [ "$(docker image inspect "$id" --format '{{.Architecture}}')" = "arm64" ]
+  must docker run --rm --platform "$PLATFORM" --network none --entrypoint /bin/sh "$id" \
+      -c 'grep -E "^(PRETTY_NAME|VERSION_ID)=" /etc/os-release; uname -m; id'
+  hdr "GO VERSION (builder stage)"
+  local biid="$EV/builder.iid"
+  must docker build --platform "$PLATFORM" --progress=quiet --target builder --iidfile "$biid" .
+  must docker run --rm --network none --entrypoint /usr/local/go/bin/go "$(cat "$biid")" version
+  hdr "DEPENDENCY DECLARATION DIGEST (after build)"
+  must shasum -a 256 go.mod go.sum
+  finish_checks
 }
 
-# S03/S04/S05/S06 —— 无外部网络启动验证
-cmd_offline() {
+# S15 safety：凭证只报告状态（R05）；容器隔离属性
+do_safety() {
+  local name="$1"
   need_docker
-  local out="$EV/02-offline-start.txt"
-  docker rm -f "$CONTAINER-offline" >/dev/null 2>&1
-  {
-    hdr "START WITH --network none (no external network, no creds)"
-    run docker run -d --name "$CONTAINER-offline" --platform "$PLATFORM" \
-        --network none "${LAB_ENV[@]}" "$IMAGE"
-    sleep 8
-    hdr "CONTAINER STATE"
-    run docker ps -a --filter "name=$CONTAINER-offline" --format '{{.Names}} {{.Status}} {{.State}}'
-    run docker inspect "$CONTAINER-offline" --format 'Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOM={{.State.OOMKilled}} Restarts={{.RestartCount}}'
-    hdr "APPLICATION LOG"
-    run docker logs "$CONTAINER-offline"
-    hdr "S04 SQLITE FILES ON DISK"
-    run docker exec "$CONTAINER-offline" ls -la /app/data /app/logs
-    hdr "S05 HEALTH ENDPOINT (in-container)"
-    run docker exec "$CONTAINER-offline" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090 || { echo "tcp connect failed"; exit 1; }; printf "GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3'
-    hdr "S04 SQLITE FUNCTIONAL READ via /api/v1/sim-stats (read-only, queries DB)"
-    run docker exec "$CONTAINER-offline" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/sim-stats HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3'
-    hdr "S06 WEB UI + READ-ONLY CONFIG API"
-    run docker exec "$CONTAINER-offline" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -c 400 <&3'
-    run docker exec "$CONTAINER-offline" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/config HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -c 800 <&3'
-    hdr "S15 CREDENTIAL / PROCESS SAFETY CHECK"
-    echo "期望：以下三项全部为空/未设置"
-    run docker exec "$CONTAINER-offline" sh -c 'env | grep -E "^(POLYMARKET_PRIVATE_KEY|BUILDER_|POLY_API)" || echo "(no credential env values)"'
-    run docker exec "$CONTAINER-offline" sh -c 'ls -la /app; test -e /app/.env && echo "WARNING: .env present in image" || echo "OK: no .env in image"'
-    run docker exec "$CONTAINER-offline" sh -c 'test -e /app/.env.example && echo "WARNING: .env.example present" || echo "OK: no .env.example in image"'
-    hdr "PROCESS USER (expect uid=10001 app, not root)"
-    run docker exec "$CONTAINER-offline" id
-  } | tee "$out"
-  echo "-> $out"
+  container_exists "$name" || die 1 "container $name not found"
+  assert_owned "$name"
+  hdr "S15 CREDENTIAL STATUS (values are never printed)"
+  # shellcheck disable=SC2016
+  local cred_script='bad=0
+for v in '"$CRED_VARS"'; do
+  if printenv "$v" >/dev/null 2>&1; then
+    if [ -n "$(printenv "$v")" ]; then echo "$v=SET (value withheld)"; bad=1; else echo "$v=EMPTY"; fi
+  else
+    echo "$v=UNSET"
+  fi
+done
+exit $bad'
+  check "all credential variables empty or unset" run docker exec "$name" sh -c "$cred_script"
+  check "no /app/.env in container" run docker exec "$name" sh -c 'test ! -e /app/.env'
+  check "no /app/.env.example in container" run docker exec "$name" sh -c 'test ! -e /app/.env.example'
+  hdr "S15 ISOLATION"
+  check "not privileged" [ "$(docker container inspect -f '{{.HostConfig.Privileged}}' "$name")" = "false" ]
+  check "no mounts" [ "$(docker container inspect -f '{{len .Mounts}}' "$name")" = "0" ]
+  check "no docker.sock inside" run docker exec "$name" sh -c 'test ! -S /var/run/docker.sock'
+  check "runs as uid 10001" [ "$(docker exec "$name" id -u 2>/dev/null)" = "10001" ]
+  run docker exec "$name" sh -c 'env | grep -E "^(TRADING_MODE|ENABLE_MAIN_STRATEGY|ENABLE_PATTERN_STRATEGY|SNIPER_MODE)=" | sort'
+  check "TRADING_MODE=simulation" [ "$(docker exec "$name" printenv TRADING_MODE 2>/dev/null)" = "simulation" ]
+  check "ENABLE_MAIN_STRATEGY=false" [ "$(docker exec "$name" printenv ENABLE_MAIN_STRATEGY 2>/dev/null)" = "false" ]
+  check "ENABLE_PATTERN_STRATEGY=false" [ "$(docker exec "$name" printenv ENABLE_PATTERN_STRATEGY 2>/dev/null)" = "false" ]
+  finish_checks
 }
 
-# S07-S10 —— 真实公开行情（外部连通性层）
-cmd_online() {
+do_offline() {
   need_docker
-  local out="$EV/03-online-market-data.txt"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1
-  {
-    hdr "START WITH NETWORK, PORT BOUND TO 127.0.0.1 ONLY"
-    run docker run -d --name "$CONTAINER" --platform "$PLATFORM" \
-        -p 127.0.0.1:${HOST_PORT}:8090 "${LAB_ENV[@]}" "$IMAGE"
-    sleep 8
-    run docker inspect "$CONTAINER" --format 'Running={{.State.Running}} ExitCode={{.State.ExitCode}}'
-    run docker port "$CONTAINER"
-    hdr "HEALTH FROM HOST (must be 127.0.0.1 only)"
-    run curl -sS -o /dev/null -w 'http=%{http_code}\n' --max-time 10 "http://127.0.0.1:${HOST_PORT}/health"
-    run curl -sS --max-time 10 "http://127.0.0.1:${HOST_PORT}/health"
-
-    hdr "S07 BINANCE SPOT REST (external connectivity, from inside container)"
-    echo "endpoints per src/binance_rest.go:14-16"
-    run docker exec "$CONTAINER" sh -c 'command -v curl >/dev/null || echo "(no curl in runtime image; see NOTE below)"'
-    echo "NOTE: runtime 镜像刻意不含 curl。外部连通性探测改用 builder 阶段镜像或宿主机执行："
-    run curl -sS -o /dev/null -w 'api.binance.com/api/v3/ticker/price?symbol=BTCUSDT -> http=%{http_code}\n' --max-time 15 'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'
-    run curl -sS -o /dev/null -w 'api.binance.com/api/v3/klines 15m -> http=%{http_code}\n' --max-time 15 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=2'
-    run bash -c "curl -sS --max-time 15 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=1' | head -c 400"
-
-    hdr "S08 BINANCE FUTURES WS ENDPOINT (src/binance_ws.go:16)"
-    echo "wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1m"
-    run curl -sS -o /dev/null -w 'ws handshake -> http=%{http_code}\n' --max-time 15 \
-        -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-        'https://fstream.binance.com/stream?streams=btcusdt@kline_15m'
-    echo "期望 http=101 (Switching Protocols)。其它值请原样记录。"
-
-    hdr "S09 POLYMARKET MARKET DISCOVERY (src/endpoint.go:4, src/search.go:16, api/strategy.go:1180-1189)"
-    echo "实际发现方式：GET gamma-api/public-search?q=<btc|eth|sol|xrp> updown 15m&events_status=active"
-    for q in 'btc+updown+15m' 'eth+updown+15m' 'sol+updown+15m' 'xrp+updown+15m'; do
-      run curl -sS -o /dev/null -w "public-search q=$q -> http=%{http_code}\n" --max-time 20 \
-        "https://gamma-api.polymarket.com/public-search?q=${q}&events_status=active"
-    done
-    echo "--- 关键：15m 市场是否仍然存在、slug 规则是否仍为 <sym>-updown-15m-<unix> ---"
-    run bash -c "curl -sS --max-time 20 'https://gamma-api.polymarket.com/public-search?q=btc+updown+15m&events_status=active' | python3 -c 'import sys,json; d=json.load(sys.stdin); ev=d.get(\"events\",[]); print(\"events:\",len(ev)); [print(\"  slug=\",e.get(\"slug\"),\"active=\",e.get(\"active\"),\"closed=\",e.get(\"closed\"),\"end=\",e.get(\"endDate\")) for e in ev[:10]]'"
-
-    hdr "S10 POLYMARKET CLOB ORDERBOOK + WS (src/realtime/rest.go:48,80,106; src/endpoint.go:8)"
-    run curl -sS -o /dev/null -w 'clob.polymarket.com/book (no token_id, expect 4xx) -> http=%{http_code}\n' --max-time 15 'https://clob.polymarket.com/book'
-    run curl -sS -o /dev/null -w 'ws-subscriptions-clob handshake -> http=%{http_code}\n' --max-time 15 \
-        -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-        'https://ws-subscriptions-clob.polymarket.com/ws/market'
-
-    hdr "S11 APPLICATION INTEGRATION — 预期为 BLOCKED"
-    echo "代码事实：Polymarket MarketManager 在 api/strategy.go:373 创建，"
-    echo "Binance WS 在 api/strategy.go:398 创建，两者都在 runSimulationLoop 内部，"
-    echo "只能由 StartSimulation() 触发；StartSimulation 的唯一 HTTP 入口是"
-    echo "POST /api/v1/sim-copy-trading（需操作码）。"
-    echo "因此：不启动模拟策略 => 应用内部不会有任何行情更新。"
-    run docker logs "$CONTAINER" --tail 40
-    echo "期望：日志中不出现 MarketManager / Binance WS 相关行。"
-  } | tee "$out"
-  echo "-> $out"
+  local id; id="$(built_image_id)" || exit $?
+  hdr "START WITH --network none (no external network, no creds) image=$id"
+  start_container "$C_OFFLINE" --network none "${LAB_ENV[@]}" "$id"
+  sleep 8
+  hdr "CONTAINER STATE"
+  run docker container inspect "$C_OFFLINE" --format 'Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOM={{.State.OOMKilled}} Restarts={{.RestartCount}}'
+  check "S03 container running" is_running "$C_OFFLINE"
+  hdr "APPLICATION LOG"
+  run docker logs "$C_OFFLINE"
+  hdr "S04 SQLITE"
+  check "S04 trades.db exists" run docker exec "$C_OFFLINE" test -s /app/data/trades.db
+  check "S04 sim-stats (queries DB) returns 200" http_in "$C_OFFLINE" /api/v1/sim-stats
+  hdr "S05 HEALTH"
+  check "S05 /health returns 200" http_in "$C_OFFLINE" /health
+  hdr "S06 WEB UI + READ-ONLY CONFIG API"
+  check "S06 / returns 200" http_in "$C_OFFLINE" / 400
+  check "S06 GET /api/v1/config returns 200" http_in "$C_OFFLINE" /api/v1/config 800
+  finish_checks
 }
 
-# S07-S10 —— 在容器网络内（而非宿主机）做公开行情探测，并统计 WS 真实消息数。
-# 使用 builder 阶段镜像（含 Go + 模块缓存）。探测程序通过 docker cp 注入一次性容器，
-# 不挂载任何宿主目录。探测程序只访问公开只读端点，不携带任何凭证。
-cmd_probe() {
+do_online() {
+  need_docker
+  local id; id="$(built_image_id)" || exit $?
+  hdr "START WITH NETWORK, PORT BOUND TO 127.0.0.1 ONLY image=$id"
+  start_container "$CONTAINER" -p "127.0.0.1:${HOST_PORT}:8090" "${LAB_ENV[@]}" "$id"
+  sleep 8
+  run docker port "$CONTAINER"
+  check "container running" is_running "$CONTAINER"
+  check "port bound to 127.0.0.1 only" [ "$(docker port "$CONTAINER" 8090/tcp 2>/dev/null)" = "127.0.0.1:${HOST_PORT}" ]
+  check "host /health 200" run curl -fsS --max-time 10 "http://127.0.0.1:${HOST_PORT}/health"
+
+  hdr "HOST-SIDE DIAGNOSTIC PROBES (not acceptance; container-network probe is 'probe')"
+  diag curl -sS -o /dev/null -w 'api.binance.com klines -> http=%{http_code}\n' --max-time 15 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=2'
+  diag curl -sS -o /dev/null -w 'gamma public-search -> http=%{http_code}\n' --max-time 20 'https://gamma-api.polymarket.com/public-search?q=btc+updown+15m&events_status=active'
+  diag curl -sS -o /dev/null -w 'clob /book without token_id (expect 4xx) -> http=%{http_code}\n' --max-time 15 'https://clob.polymarket.com/book'
+  hdr "APPLICATION LOG (no strategy started => no market components expected)"
+  run docker logs "$CONTAINER" --tail 40
+  finish_checks
+}
+
+do_probe() {
   need_docker
   local secs="${1:-30}"
-  local out="$EV/03b-container-probe.txt"
-  local pc="$CONTAINER-probe"
-  docker rm -f "$pc" >/dev/null 2>&1
-  {
-    hdr "CONTAINER-NETWORK PUBLIC MARKET-DATA PROBE (collect ${secs}s per WS)"
-    run docker build --platform "$PLATFORM" --progress=quiet --target builder -t "$IMAGE-builder" .
-    run docker create --name "$pc" --platform "$PLATFORM" --workdir /src \
-        --entrypoint /usr/local/go/bin/go "$IMAGE-builder" \
-        run scripts/poc/wsprobe/main.go -seconds "$secs"
-    run docker cp scripts/poc/wsprobe/main.go "$pc:/src/scripts/poc/wsprobe/main.go"
-    run docker start -a "$pc"
-    run docker rm "$pc"
-  } | tee "$out"
-  echo "-> $out"
+  built_image_id >/dev/null || exit $?
+  hdr "CONTAINER-NETWORK PUBLIC MARKET-DATA PROBE (collect ${secs}s per WS)"
+  echo "NOTE: probe 统计的是 WebSocket 文本帧数量，不等于有效市场消息数（R06）。"
+  local biid="$EV/probe-builder.iid"
+  must docker build --platform "$PLATFORM" --progress=quiet --target builder --iidfile "$biid" .
+  safe_rm "$C_PROBE"
+  must docker create --name "$C_PROBE" --platform "$PLATFORM" \
+      --label "$LABEL_EXP_KEY=$LABEL_EXP_VAL" --label "$LABEL_RUN_KEY=$RUN_ID" \
+      --workdir /src --entrypoint /usr/local/go/bin/go "$(cat "$biid")" \
+      run scripts/poc/wsprobe/main.go -seconds "$secs"
+  must docker cp scripts/poc/wsprobe/main.go "$C_PROBE:/src/scripts/poc/wsprobe/main.go"
+  run docker start -a "$C_PROBE"
+  local rc=$?
+  safe_rm "$C_PROBE"
+  [ "$rc" -ne 0 ] && echo "PROBE RESULT: FAIL (exit=$rc) — 见上方 RESULT 行"
+  exit "$rc"
 }
 
-cmd_observe() {
+do_observe() {
   need_docker
-  local mins="${1:-20}"
-  local out="$EV/04-observe-${mins}min.txt"
-  {
-    hdr "CONTINUOUS OBSERVATION ${mins} MINUTES (real elapsed time, recorded)"
-    echo "start: $(ts)"
-    local i
-    for ((i=1; i<=mins; i++)); do
-      sleep 60
-      printf '[%s] t+%dm ' "$(ts)" "$i"
-      docker inspect "$CONTAINER" --format 'running={{.State.Running}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' 2>&1 | tr -d '\n'
-      printf ' | '
-      docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' "$CONTAINER" 2>&1 | tr -d '\n'
-      printf ' | health='
-      curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${HOST_PORT}/health" 2>&1
-      echo
-    done
-    echo "end: $(ts)"
-    hdr "LOG AFTER OBSERVATION (error/repeat check)"
-    run docker logs "$CONTAINER" --tail 120
-    hdr "SQLITE FILES AFTER OBSERVATION"
-    run docker exec "$CONTAINER" ls -la /app/data /app/logs
-  } | tee "$out"
-  echo "-> $out"
+  local mins="${1:-15}" i code
+  case "$mins" in ''|*[!0-9]*) die 2 "observe 分钟数必须是正整数：$mins" ;; esac
+  container_exists "$CONTAINER" || die 1 "container $CONTAINER not found (run 'online' first)"
+  assert_owned "$CONTAINER"
+  hdr "CONTINUOUS OBSERVATION ${mins} MINUTES (idle process; real elapsed time)"
+  echo "NOTE: 未启动策略，进程无行情负载；这不是带行情负载的稳定性测试（R06）。"
+  echo "start: $(ts)"
+  for ((i=1; i<=mins; i++)); do
+    sleep 60
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${HOST_PORT}/health" 2>/dev/null)"
+    printf '[%s] t+%dm %s | %s | health=%s\n' "$(ts)" "$i" \
+      "$(docker container inspect "$CONTAINER" --format 'running={{.State.Running}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' 2>&1)" \
+      "$(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' "$CONTAINER" 2>&1)" "$code"
+    [ "$code" = "200" ] || { echo "CHECK FAIL: health at t+${i}m = $code"; FAILS=$((FAILS+1)); }
+    is_running "$CONTAINER" || { echo "CHECK FAIL: not running at t+${i}m"; FAILS=$((FAILS+1)); }
+  done
+  echo "end: $(ts)"
+  hdr "LOG AFTER OBSERVATION"
+  run docker logs "$CONTAINER" --tail 120
+  check "restart count is 0" [ "$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER")" = "0" ]
+  finish_checks
 }
 
-cmd_lifecycle() {
+do_lifecycle() {
   need_docker
-  local out="$EV/05-lifecycle.txt"
-  {
-    hdr "S13 GRACEFUL STOP"
-    run docker stop -t 20 "$CONTAINER"
-    run docker inspect "$CONTAINER" --format 'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}} FinishedAt={{.State.FinishedAt}}'
-    echo "期望 ExitCode=0（main.go:204-227 处理 SIGTERM 并优雅退出）"
-    run docker logs "$CONTAINER" --tail 15
-    hdr "S14 RESTART FROM THE SAME IMAGE (fresh container, fresh temp DB)"
-    run docker rm -f "$CONTAINER"
-    run docker run -d --name "$CONTAINER" --platform "$PLATFORM" \
-        -p 127.0.0.1:${HOST_PORT}:8090 "${LAB_ENV[@]}" "$IMAGE"
-    sleep 8
-    run docker inspect "$CONTAINER" --format 'Running={{.State.Running}} ExitCode={{.State.ExitCode}}'
-    run curl -sS -o /dev/null -w 'health after restart -> http=%{http_code}\n' --max-time 10 "http://127.0.0.1:${HOST_PORT}/health"
-    run docker exec "$CONTAINER" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8090; printf "GET /api/v1/sim-stats HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; cat <&3'
-    run docker logs "$CONTAINER" --tail 25
-  } | tee "$out"
-  echo "-> $out"
+  local id; id="$(built_image_id)" || exit $?
+  container_exists "$CONTAINER" || die 1 "container $CONTAINER not found (run 'online' first)"
+  hdr "S13 GRACEFUL STOP"
+  safe_stop "$CONTAINER"
+  run docker container inspect "$CONTAINER" --format 'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} FinishedAt={{.State.FinishedAt}}'
+  check "S13 exit code 0" [ "$(docker container inspect -f '{{.State.ExitCode}}' "$CONTAINER")" = "0" ]
+  run docker logs "$CONTAINER" --tail 5
+  hdr "S14 RESTART FROM THE SAME IMAGE ID ($id)"
+  start_container "$CONTAINER" -p "127.0.0.1:${HOST_PORT}:8090" "${LAB_ENV[@]}" "$id"
+  sleep 8
+  check "S14 running after restart" is_running "$CONTAINER"
+  check "S14 host /health 200" run curl -fsS --max-time 10 "http://127.0.0.1:${HOST_PORT}/health"
+  check "S14 sim-stats 200" http_in "$CONTAINER" /api/v1/sim-stats
+  finish_checks
 }
 
-cmd_teardown() {
+do_teardown() {
   need_docker
-  local out="$EV/06-teardown.txt"
-  {
-    hdr "STOP EXPERIMENT CONTAINERS (images and previous experiment dirs untouched)"
-    run docker stop -t 20 "$CONTAINER"
-    run docker stop -t 20 "$CONTAINER-offline"
-    run docker ps -a --filter "name=$CONTAINER" --format '{{.Names}} {{.Status}}'
-    echo "NOTE: 容器刻意保留（未 rm），以便复查状态与日志。"
-    echo "      确认不再需要后手动删除： docker rm $CONTAINER $CONTAINER-offline"
-  } | tee "$out"
-  echo "-> $out"
+  hdr "STOP THIS RUN'S EXPERIMENT CONTAINERS (kept, not removed)"
+  safe_stop "$CONTAINER"
+  safe_stop "$C_OFFLINE"
+  run docker ps -a --filter "label=$LABEL_RUN_KEY=$RUN_ID" --format '{{.Names}} {{.Status}}'
+  echo "NOTE: 容器保留以便复查。删除：RUN_ID=$RUN_ID bash $0 cleanup"
 }
 
-case "${1:-}" in
-  preflight) cmd_preflight ;;
-  build)     cmd_build ;;
-  offline)   cmd_offline ;;
-  online)    cmd_online ;;
-  probe)     cmd_probe "${2:-30}" ;;
-  observe)   cmd_observe "${2:-20}" ;;
-  lifecycle) cmd_lifecycle ;;
-  teardown)  cmd_teardown ;;
-  *) sed -n '2,30p' "$0"; exit 2 ;;
-esac
+do_cleanup() {
+  need_docker
+  hdr "REMOVE THIS RUN'S EXPERIMENT CONTAINERS (ownership checked)"
+  safe_rm "$CONTAINER"
+  safe_rm "$C_OFFLINE"
+  safe_rm "$C_PROBE"
+}
+
+# all：基础设施失败立即中止；行情探测失败记录后继续，最终退出码非零
+do_all() {
+  local overall=0 rc
+  step 00-preflight.txt do_preflight || exit $?
+  step 01-build.txt do_build || exit $?
+  step 02-offline.txt do_offline || exit $?
+  step 02b-safety-offline.txt do_safety "$C_OFFLINE" || exit $?
+  step 03-online.txt do_online || exit $?
+  step 03b-probe.txt do_probe "${PROBE_SECONDS:-30}"; rc=$?; [ "$rc" -ne 0 ] && overall=$rc
+  step 04-observe.txt do_observe "${OBSERVE_MINUTES:-15}"; rc=$?; [ "$rc" -ne 0 ] && overall=$rc
+  step 05-lifecycle.txt do_lifecycle || exit $?
+  step 05b-safety-online.txt do_safety "$CONTAINER"; rc=$?; [ "$rc" -ne 0 ] && overall=$rc
+  step 06-teardown.txt do_teardown || exit $?
+  echo "ALL DONE RUN_ID=$RUN_ID overall_exit=$overall evidence=$EV"
+  exit "$overall"
+}
+
+usage() { sed -n '2,40p' "$0"; }
+
+main() {
+  local cmd="${1:-}"
+  [ -n "$cmd" ] || { usage; exit 2; }
+  shift
+  init_evidence
+  echo "RUN_ID=$RUN_ID evidence=$EV" >&2
+  case "$cmd" in
+    preflight) step 00-preflight.txt do_preflight ;;
+    build)     step 01-build.txt do_build ;;
+    offline)   step 02-offline.txt do_offline ;;
+    safety)    step "02b-safety-${1:-online}.txt" do_safety "$( [ "${1:-online}" = offline ] && echo "$C_OFFLINE" || echo "$CONTAINER")" ;;
+    online)    step 03-online.txt do_online ;;
+    probe)     step 03b-probe.txt do_probe "${1:-30}" ;;
+    observe)   step 04-observe.txt do_observe "${1:-15}" ;;
+    lifecycle) step 05-lifecycle.txt do_lifecycle ;;
+    teardown)  step 06-teardown.txt do_teardown ;;
+    cleanup)   step 07-cleanup.txt do_cleanup ;;
+    all)       do_all ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+# 测试可 source 本文件而不执行 main
+if [ "${DAY0_SMOKE_SOURCE_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi

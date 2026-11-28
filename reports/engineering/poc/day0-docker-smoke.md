@@ -489,6 +489,8 @@ PoC 整体状态：**PARTIAL**。
 > **处置结论（2026-11-28，项目负责人）**：已与原作者确认，`BUILDER_ADDRESS` 对应钱包余额
 > 低于 1 美元且原作者已弃用该账号，本议题**不再跟进**，不作为 Issue #3 的阻塞项。
 > 以下内容作为审计留档保留，不要求本阶段修复。
+>
+> **R06 补充**：该决策只表示“不作为 #3 的阻塞项”。凭证已公开且仍可能有效，风险不因钱包余额低而消失（§20.4）。
 
 提示词 §8.1 的假设与实测不符，**实际情况更需要处理**：
 
@@ -597,7 +599,7 @@ PoC 整体状态：**PARTIAL**。
 | **P-13** | API | `wss://fstream.binance.com/stream?streams=...` 101 但 30 s 0 消息；`/market/stream?streams=...` 338 条 | Binance USDⓈ-M 合约 WS 按 market/public/private 分路径，旧路径不再推送行情 | `src/binance_ws.go:16` 改为 `/market/stream?streams=`，并补一个“连上但无数据”的告警 | 是（业务代码） | OPEN → **Issue #6**（S11 已在应用内复现） |
 | **P-14** | BUILD-ENV | 第 1 次构建卡在 `resolve image config for docker/dockerfile:1` 704 s 后 `lease does not exist` | 与构建期间并发且被中断的 `docker pull` 有关，或 Docker Hub 瞬时故障 | 无需改动；若复现，可预先 `docker pull docker/dockerfile:1` 或去掉 `# syntax=` 行（Dockerfile 未用到新语法特性） | 否 | OBSERVED，重试即通过 |
 | **P-15** | DOMAIN | 15m 市场描述的结算来源为 Chainlink BTC/USD TWAP | — | 后续阶段评估策略参考价与结算口径是否一致 | — | OPEN（不在 #3 范围） |
-| **P-17** | PERF | S11 中 Polymarket 市场 WS 订阅 8 个资产约 13 s 后被服务端 `close 1013: slow consumer: send buffer full` 断开，自动重连成功 | 读取循环与回调处理串行，处理速度跟不上推送量 | 读循环与处理解耦（带缓冲通道）；先做长时间观察量化断连频率 | 是（业务代码） | OPEN → **Issue #8**（后续独立性能研究，不在 #3 范围） |
+| **P-17** | PERF | S11 中 Polymarket 市场 WS 订阅 8 个资产约 13 s 后被服务端 `close 1013: slow consumer: send buffer full` 断开，自动重连成功 | **假设（未验证）**：读取循环与回调处理串行，处理速度跟不上推送量 | 读循环与处理解耦（带缓冲通道）；先做长时间观察量化断连频率 | 是（业务代码） | OPEN → **Issue #8**（后续独立性能研究，不在 #3 范围） |
 | **P-16** | EVIDENCE | `05b-isolation.txt` 的 `ENABLE_*` grep 正则错误 | 本人脚本失误 | 已在 §15 用其它证据补足 | 否 | NOTED |
 
 ---
@@ -611,19 +613,86 @@ PoC 整体状态：**PARTIAL**。
 3. ~~PR #4 与 PR #5 的合并顺序~~：PR #4 已关闭为被 #5 取代；PR #5 待独立审查后由负责人决定合并。
 4. ~~P-17 立项~~：已登记 Issue #8，作为后续独立性能研究，不在本轮修复范围。
 
-### 20.2 复现命令
+### 20.2 复现命令与自动化覆盖范围
+
+**重要：** `evidence/` 根目录下的 `00`–`07` 文件由**旧版脚本**（提交 `8ee6e41` 时的版本）及手工命令生成，属历史实测证据，
+**保持原样不改**。下方是按审查 R04 / R05 修复后的**新版脚本**，尚未用它重跑完整实验（本轮不要求重跑）；
+新版脚本只用 mock Docker 测试和一次真实 `preflight` 做过验证（§20.3）。
 
 ```bash
-docker build --platform linux/arm64 -t polymarket-engineering-lab:day0 .
-bash scripts/poc/day0-docker-smoke.sh offline     # S03–S06, S15
-bash scripts/poc/day0-docker-smoke.sh online      # 应用联网启动 + 宿主机侧外部探测
-bash scripts/poc/day0-docker-smoke.sh probe 30    # S07–S10 容器网络内探测（WS 计数）
-bash scripts/poc/day0-docker-smoke.sh observe 15  # S12
+export RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)          # 一次实验一个 RUN_ID
+bash scripts/poc/day0-docker-smoke.sh preflight   # 主机 / Git / 依赖摘要 / Docker
+bash scripts/poc/day0-docker-smoke.sh build       # S01–S02；失败即停止
+bash scripts/poc/day0-docker-smoke.sh offline     # S03–S06（--network none）
+bash scripts/poc/day0-docker-smoke.sh safety offline   # S15（凭证只报告 EMPTY/SET/UNSET）
+bash scripts/poc/day0-docker-smoke.sh online      # 联网启动 + 宿主机侧诊断探测
+bash scripts/poc/day0-docker-smoke.sh probe 30    # S07–S10 容器网络内探测
+bash scripts/poc/day0-docker-smoke.sh observe 15  # S12（空闲进程）
 bash scripts/poc/day0-docker-smoke.sh lifecycle   # S13–S14
-bash scripts/poc/day0-docker-smoke.sh teardown
+bash scripts/poc/day0-docker-smoke.sh safety      # S15（联网容器）
+bash scripts/poc/day0-docker-smoke.sh teardown    # 停止本轮容器（保留）
+bash scripts/poc/day0-docker-smoke.sh cleanup     # 删除本轮容器（校验归属）
+# 或一次性执行上述全部步骤：bash scripts/poc/day0-docker-smoke.sh all
 ```
 
-### 20.3 证据清单（`reports/engineering/poc/evidence/`）
+| 范围 | 状态 |
+|---|---|
+| S01–S10、S12–S15 | 脚本自动化 |
+| **S11**（获批模拟启停） | **未自动化**：本次手工执行（证据 `07`）；需要操作码与负责人逐次批准，刻意不放进脚本 |
+| S12 | 仅空闲进程（不启动策略）；**不覆盖带行情负载的持续观察** |
+| S08 / S10 WS | `probe` 统计的是 WebSocket **文本帧数**，不校验是否为有效市场消息 |
+| S09 | `probe` 的回退探测走 `/events?slug=`，应用实际走 `/markets?slug=`；后者由 `evidence/03c` 单独覆盖（手工命令） |
+
+新版脚本的行为（R04 / R05）：
+
+| 规则 | 实现 |
+|---|---|
+| 退出码传播 | `run` 返回被执行命令的真实退出码；`must` 失败即终止当前步骤；`step` 经 `PIPESTATUS` 把 `tee` 前的退出码传出；诊断性预期失败用 `diag` 单独记录、不传播 |
+| 构建失败即停止 | `build` 失败立即以 docker build 的退出码退出，不检查任何镜像 |
+| 不误用旧镜像 | 用 `--iidfile` 记录**本轮**构建的镜像 ID；`offline` / `online` / `lifecycle` / `probe` 只使用该 ID，缺失即以退出码 3 拒绝，不回退到已有标签 |
+| 证据隔离 | 默认写入 `evidence/runs/<RUN_ID>/`；目标文件已存在则拒绝（退出码 3）；拒绝写入 `evidence/` 根目录；`RUN_ID` 只允许 `[A-Za-z0-9_.-]` |
+| 容器归属 | 所有实验容器带 label `org.polymarket-lab.experiment=m0-day0-smoke` 与 `org.polymarket-lab.run=<RUN_ID>`；`stop` / `rm` / `exec` 前必须两者都匹配，否则拒绝（退出码 3） |
+| 凭证检查 | 只输出 `NAME=EMPTY` / `NAME=SET (value withheld)` / `NAME=UNSET`，任一非空即断言失败 |
+| 断言 | `/health`、`sim-stats`、Web UI、config 以 HTTP 200 判定；运行状态、端口仅 127.0.0.1、非特权、无挂载、无 socket、uid、交易开关均为断言，任一失败步骤非零退出 |
+
+退出码：0 全部通过 · 1 断言 / 关键命令失败 · 2 用法错误 · 3 安全拒绝。
+
+### 20.3 脚本测试（R04 / R05）
+
+`bash scripts/poc/tests/day0-smoke.test.sh`：使用临时目录里的 mock `docker`，不触碰真实 Docker、不联网、
+不写入 `evidence/`。2026-11-28 在本机（macOS 自带 bash 3.2.57）运行结果：**57 pass / 0 fail，退出码 0**。
+
+| 组 | 覆盖 |
+|---|---|
+| T1 | `bash -n` 两个脚本 |
+| T2 | `run` / `must` / `diag` / `tee` 管道 / `step` 的退出码（1、7、0、5、诊断 0、4、6） |
+| T3 | mock 构建返回 17 → 脚本退出 17，证据记录 `BUILD FAILED` 与 `[exit=17]`，无 `image.iid`，之后无 `docker image inspect` / `docker run` |
+| T4 | 同一 RUN_ID 构建失败后，`offline` / `online` / `lifecycle` / `probe` 均退出 3 且不启动任何容器 |
+| T5 | 构建成功 → `image.iid` 为本轮新 ID，按 ID 而非标签检查 |
+| T6 | 同一 RUN_ID 重复写同一证据 → 退出 3 且原文件摘要不变；指向 `evidence/` 根目录 → 3；含 `/` 的 RUN_ID → 2；无子命令 → 2 |
+| T7 | 外来 label / 其它 RUN_ID / 同名外来容器 → 退出 3，无 `stop` / `rm` / `run`；本轮容器 → 正常 `stop` |
+| T8 | 凭证为假秘密值时 safety 退出 1，输出 `SET (value withheld)`，证据与标准输出均不含该值；凭证为空时退出 0；外来容器 → 3 且不 `exec` |
+| T9 | `evidence/*.txt` 历史证据摘要前后一致 |
+
+补充验证：
+- `shellcheck -S warning`（0.9.0，一次性 `ubuntu:24.04` 容器内运行，只读挂载 `scripts/poc`）：0 告警，退出码 0。
+- 真实 Docker：`preflight` 退出 0；随后同一 RUN_ID 执行 `offline`，本机仍有旧标签 `polymarket-engineering-lab:day0`，
+  脚本以退出码 3 拒绝，未创建任何容器。（证据写到临时目录，未提交。）
+- 修复过程中发现并修正的真实缺陷：bash 3.2 会把紧跟在 `$f` 后的全角字符当作变量名的一部分，导致 `unbound variable`
+  并以 1 而不是 3 退出；已统一改为 `${var}`。
+
+### 20.4 R06 记录（非阻塞，留待最终复测 / ADR-001）
+
+| 项 | 记录 |
+|---|---|
+| WS 计数口径 | `probe` 与报告中的 S08 / S10 消息数是**帧数**，未区分心跳、订阅确认与有效行情；最终复测需按事件类型断言有效消息 |
+| S09 探测路径 | `wsprobe` 回退用 `/events?slug=`，应用用 `/markets?slug=`，两者不完全相同；应用路径由 `03c` 证据覆盖。最终复测应统一为应用路径 |
+| S11 / S12 | S11 为手工执行；S12 仅空闲进程。Issue #6 / #7 完成后的完整 Smoke Test 需包含带行情负载的持续观察 |
+| 镜像可复现性 | `ubuntu:24.04` 与 BuildKit 前端 `docker/dockerfile:1` 均为可变标签，未固定 digest；留 ADR-001 决定是否按 digest 固定 |
+| 凭证风险 | §18.1 的 `.env.example` 凭证泄露仍是真实风险：负责人决策的是“不作为 #3 阻塞项”，低余额不等于风险消失（凭证仍可用于赎回 / relayer 路径，且已公开） |
+| P-17 | slow consumer 的根因（读取与处理串行）仍是**假设**，未经实测验证，交由 Issue #8 研究 |
+
+### 20.5 历史证据清单（`reports/engineering/poc/evidence/`，旧版脚本与手工命令生成，不改动）
 
 | 文件 | 内容 |
 |---|---|
@@ -653,3 +722,4 @@ bash scripts/poc/day0-docker-smoke.sh teardown
 - 外部接口可达不等于应用功能可用：S11 单独在应用内部验证，结果按 Polymarket / Binance 分别记录。
 - 未修改业务代码、go.mod、go.sum；未为了让矩阵变绿而绕过任何限制。
 - 2026-11-28 按审查意见 R01–R03 只修正了报告措辞与统计，`evidence/` 下的原始实验输出未作任何修改。
+- 按 R04 / R05 修复的是复现脚本；修复后的脚本未用于重跑实验，历史证据仍来自旧版脚本（§20.2）。
