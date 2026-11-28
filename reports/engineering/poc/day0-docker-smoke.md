@@ -24,7 +24,12 @@ go.mod/go.sum 未变）；应用在无私钥、无凭证下启动，SQLite、`/h
 
 S11（应用内部行情状态更新）经负责人批准后执行了一次模拟启停（§12）：Polymarket 侧应用内部发现 4 个市场、
 订阅 8 个资产、回调持续增长 → 通过；Binance 侧应用内部 60 秒无消息触发“连接僵死”重连 → 在应用内复现 P-13。
-S11 记为 **PARTIAL**。P-13 / P-12 已分别登记为 Issue #6 / #7。
+S11 记为 **PARTIAL**。P-13 / P-12 已分别登记为 Issue #6 / #7，P-17 登记为 Issue #8。
+
+验收合计：**PASS 13**（S09、S12 带限定）· **FAIL 1**（S08）· **PARTIAL 1**（S11）。PoC 整体 **PARTIAL**。
+
+安全事实：经负责人批准执行过一次模拟启停（仅 S11；主策略关闭、仅维护行情状态），未产生模拟成交，
+未执行真实交易，未使用真实私钥及真实交易凭证，未访问生产数据库。其余测试均为普通启动测试，未调用启动 / 停止 / 写入型接口（§18.4）。
 
 ---
 
@@ -126,7 +131,7 @@ PR #4 已关闭，不再存在合并冲突问题；`CURRENT_STATUS.md` 以本分
 | 镜像不含原作者私钥 | ✔ | `.dockerignore` 排除 `.env*`；镜像内 `find` 无 `.env*` / `*.key` / `*_real.yaml` / `*.db`，唯一 `.pem` 为系统 CA 包 `/usr/lib/ssl/cert.pem` |
 | ENV 运行时注入 | ✔ | 镜像 ENV 仅安全默认值；凭证类变量全部由 `docker run -e` 注入为空 |
 | 无私钥启动 | ✔ | §9 |
-| 禁止真实/模拟交易 | ✔ | `TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、`ENABLE_PATTERN_STRATEGY=false`；未调用任何写入或策略启动接口 |
+| 禁止真实交易及未经批准的模拟交易 | ✔ | `TRADING_MODE=simulation`、`ENABLE_MAIN_STRATEGY=false`、`ENABLE_PATTERN_STRATEGY=false`。S01–S10、S12–S15 的普通启动测试中未调用任何写入或策略启动接口；仅 S11 经负责人批准执行一次模拟启停（主策略关闭、仅维护行情状态、0 笔模拟成交，§12） |
 | Web UI 仅本地 | ✔ | `-p 127.0.0.1:8090:8090`；宿主机 `lsof` 仅 `127.0.0.1:8090 (LISTEN)` |
 | 不挂载生产目录 / Docker Socket | ✔ | `Binds=[] Mounts=[]`；容器内无 `/var/run/docker.sock`；`Privileged=false CapAdd=[]`，进程 `CapEff=0` |
 
@@ -312,8 +317,11 @@ Running=true ExitCode=0 OOM=false Restarts=0
 | `GET /api/v1/config` | `200` `{"success":true,"config_file":"strategy_config.yaml","groups":[{...全 0 默认值...}]}` |
 | `GET /api/v1/sim-stats` | `200`，trade_count=0 |
 
-未调用任何写入型接口：`DELETE /api/v1/trades`、`PUT /api/v1/config`、`POST /api/v1/config/reload`、
-`/api/v1/sim-copy-trading`、`/api/v1/sim-stop-trading`。
+普通启动测试（S01–S10、S12–S15）中未调用任何写入型接口：`DELETE /api/v1/trades`、`PUT /api/v1/config`、
+`POST /api/v1/config/reload`、`/api/v1/sim-copy-trading`、`/api/v1/sim-stop-trading`。
+唯一例外是 S11：经负责人批准，在独立容器中各调用一次 `POST /api/v1/sim-copy-trading?type=2` 与
+`POST /api/v1/sim-stop-trading`（外加一次不带操作码、被 401 拒绝的鉴权检查），见 §12。
+`DELETE /api/v1/trades`、`PUT /api/v1/config`、`POST /api/v1/config/reload` 在整个实验期间均未调用。
 
 只读接口清单（经代码确认）：`/health`、`/`、`/index.html`、`/api-test.html`、`GET /api/v1/sim-stats`、`GET /api/v1/config`。
 
@@ -387,7 +395,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
   心跳仍报告 `Binance: 已连接`，健康状态具有误导性。
 - 新发现 P-17：Polymarket WS 在订阅 8 个资产后约 13 秒即因 slow consumer 被服务端断开，说明应用读取 / 处理速度跟不上推送量；
   本次自动重连成功，但长时间运行下的频率未观察。
-- 全程 0 笔模拟成交（Main 策略处于被动模式），未触及任何真实下单路径。
+- 本次模拟启停期间 0 笔模拟成交（Main 策略关闭，仅维护行情状态），未触及任何真实下单路径。
 
 ## 13. 连续运行（S12）
 
@@ -424,7 +432,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
 | 端口 | `127.0.0.1:8090` only（`docker port` 与宿主机 `lsof`） |
 | 用户 | uid 10001 `app` |
 | 凭证 | 所有凭证类 ENV 为空；镜像内无 `.env` / `.env.example` / 私钥文件 |
-| 交易 | `TRADING_MODE=simulation`；Pattern 策略日志确认禁用；`sim-stats` 全程 trade_count=0；未调用任何策略 / 写入接口 |
+| 交易 | `TRADING_MODE=simulation`；Pattern 策略日志确认禁用；所有容器的 `sim-stats` 始终 trade_count=0。普通启动测试（`02`–`06` 证据）未调用任何策略 / 写入接口；S11（`07` 证据）为负责人批准的一次模拟启停，主策略关闭、0 笔模拟成交、无真实交易 |
 | 生产数据 | 未挂载、未访问；仅容器内临时库 |
 
 记录缺陷：`05b-isolation.txt` 中筛选 `ENABLE_*` 变量的 grep 正则写错（`ENABLE_=`），未打印出两个 `ENABLE_*_STRATEGY` 值；
@@ -455,7 +463,8 @@ Running=true ExitCode=0 OOM=false Restarts=0
 | S14 | 相同镜像重新启动 | **PASS** | 新容器启动、健康、查库正常 |
 | S15 | 资金、凭证及生产数据安全 | **PASS** | §15 |
 
-合计：PASS 12（S09、S12 带限定）· FAIL 1（S08）· PARTIAL 1（S11）· 未执行 0。
+合计（共 15 项）：**PASS 13**（S01–S07、S09、S10、S12–S15；其中 S09、S12 带限定条件）· **FAIL 1**（S08）· **PARTIAL 1**（S11）· 未执行 0。
+PoC 整体状态：**PARTIAL**。
 
 ---
 
@@ -517,7 +526,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
 | # | 路径 | 触发条件 | 本次的阻断手段 |
 |---|---|---|---|
 | 1 | 进程启动自动拉起 Pattern 策略（`main.go:184-201`） | `ENABLE_PATTERN_STRATEGY != "false"`（**代码默认 `"true"`**）且 `PATTERN_CONFIG_FILE` 存在 | 显式 `ENABLE_PATTERN_STRATEGY=false`，并且 `PATTERN_CONFIG_FILE` 留空（默认指向仓库中不存在的 `strategy_config_3.yaml`） |
-| 2 | HTTP `POST /api/v1/sim-copy-trading` → `StartSimulation` → 可能初始化真实下单客户端 | 操作码正确 **且** 某配置组 `TradingMode=="real"` | `TRADING_MODE=simulation`；不调用该接口 |
+| 2 | HTTP `POST /api/v1/sim-copy-trading` → `StartSimulation` → 可能初始化真实下单客户端 | 操作码正确 **且** 某配置组 `TradingMode=="real"` | `TRADING_MODE=simulation`（`TradingMode` 只取自环境变量），因此即使调用也只进入模拟分支（dummy key 只读客户端，`api/strategy.go:233-245`）。普通启动测试中不调用；S11 经负责人批准调用一次，日志确认 `已初始化只读 ClobClient (用于模拟盘订单簿验证)`、未出现 `真实交易模式已启用` |
 | 3 | `StartSimulation` 内部二次拉起 Pattern 策略（`api/strategy.go:279-304`） | `ENABLE_PATTERN_STRATEGY == "true"` 且配置文件存在 | 同 #1 |
 
 真实下单与链上写入的实际闸门有三道，必须同时成立才会发生：
@@ -547,10 +556,27 @@ Running=true ExitCode=0 OOM=false Restarts=0
 
 ### 18.4 本轮边界遵守情况
 
-未执行：真实资金交易、真实订单提交或撤销、资金转移及赎回、链上授权、模拟交易执行、策略启动、
-写入型 API 调用、访问生产数据库、读取任何真实凭证值、业务代码修改、依赖升级、修改 Docker Desktop 设置、
-特权容器、挂载宿主目录或 Docker socket、通过代理绕过区域限制、`git clean` / `git reset --hard`、
-强制删除分支、删除远端分支、改写历史、强制推送、合并 PR、关闭 Issue。
+按阶段区分：
+
+| 阶段 | 启动 / 停止 / 写入型 API | 交易 |
+|---|---|---|
+| S01–S10、S12–S15 普通启动测试（证据 `01`–`06`） | 未调用任何策略启动、停止或写入型接口；仅访问 `/health`、`/`、`GET /api/v1/config`、`GET /api/v1/sim-stats` | 无 |
+| S11 获批验证（证据 `07`） | 经负责人批准，调用 `POST /api/v1/sim-copy-trading?type=2` 与 `POST /api/v1/sim-stop-trading` 各一次（另有一次无操作码请求被 401 拒绝） | 主策略关闭，仅维护行情状态；**0 笔模拟成交**；无真实交易 |
+
+整个实验期间统一成立的事实：
+
+- 经项目负责人批准，执行过且仅执行过**一次**模拟启停（S11）。
+- 主交易策略关闭（`ENABLE_MAIN_STRATEGY=false`），Pattern 策略关闭，仅维护市场行情状态。
+- 未产生任何模拟成交（`sim-stats` 始终 trade_count=0）。
+- 未执行真实交易：无真实订单提交或撤销、无资金转移、无赎回、无链上授权。
+- 未使用真实私钥及真实交易凭证（所有凭证类环境变量为空）。S11 使用的是源码中硬编码的应用操作码
+  （`api/auth.go:10`，公开仓库可见，P-05），仅作为 HTTP 头传入，未写入任何证据或报告。
+- 未访问生产数据库（仅容器内临时 SQLite）。
+- `DELETE /api/v1/trades`、`PUT /api/v1/config`、`POST /api/v1/config/reload` 从未调用。
+
+同样未执行：业务代码修改、依赖升级、修改 Docker Desktop 设置、特权容器、挂载宿主目录或 Docker socket、
+通过代理绕过区域限制、`git clean` / `git reset --hard`、强制删除分支、删除远端分支、改写历史、强制推送、
+自动合并 PR、关闭 Issue。
 
 ---
 
@@ -571,7 +597,7 @@ Running=true ExitCode=0 OOM=false Restarts=0
 | **P-13** | API | `wss://fstream.binance.com/stream?streams=...` 101 但 30 s 0 消息；`/market/stream?streams=...` 338 条 | Binance USDⓈ-M 合约 WS 按 market/public/private 分路径，旧路径不再推送行情 | `src/binance_ws.go:16` 改为 `/market/stream?streams=`，并补一个“连上但无数据”的告警 | 是（业务代码） | OPEN → **Issue #6**（S11 已在应用内复现） |
 | **P-14** | BUILD-ENV | 第 1 次构建卡在 `resolve image config for docker/dockerfile:1` 704 s 后 `lease does not exist` | 与构建期间并发且被中断的 `docker pull` 有关，或 Docker Hub 瞬时故障 | 无需改动；若复现，可预先 `docker pull docker/dockerfile:1` 或去掉 `# syntax=` 行（Dockerfile 未用到新语法特性） | 否 | OBSERVED，重试即通过 |
 | **P-15** | DOMAIN | 15m 市场描述的结算来源为 Chainlink BTC/USD TWAP | — | 后续阶段评估策略参考价与结算口径是否一致 | — | OPEN（不在 #3 范围） |
-| **P-17** | PERF | S11 中 Polymarket 市场 WS 订阅 8 个资产约 13 s 后被服务端 `close 1013: slow consumer: send buffer full` 断开，自动重连成功 | 读取循环与回调处理串行，处理速度跟不上推送量 | 读循环与处理解耦（带缓冲通道）；先做长时间观察量化断连频率 | 是（业务代码） | OPEN（已在 #7 中提及） |
+| **P-17** | PERF | S11 中 Polymarket 市场 WS 订阅 8 个资产约 13 s 后被服务端 `close 1013: slow consumer: send buffer full` 断开，自动重连成功 | 读取循环与回调处理串行，处理速度跟不上推送量 | 读循环与处理解耦（带缓冲通道）；先做长时间观察量化断连频率 | 是（业务代码） | OPEN → **Issue #8**（后续独立性能研究，不在 #3 范围） |
 | **P-16** | EVIDENCE | `05b-isolation.txt` 的 `ENABLE_*` grep 正则错误 | 本人脚本失误 | 已在 §15 用其它证据补足 | 否 | NOTED |
 
 ---
@@ -581,9 +607,9 @@ Running=true ExitCode=0 OOM=false Restarts=0
 ### 20.1 状态与待决策
 
 1. ~~S11 授权~~：已批准并执行（§12）。
-2. ~~P-12 / P-13 立项~~：已提交 Issue #7 / #6。建议先修 #6，修复后重跑 S08 / S11。
+2. ~~P-12 / P-13 立项~~：已提交并获批 Issue #6 / #7。顺序（Issue #3 决策）：PR #5 合并后先实施 #6，验收后实施 #7，各自独立 PR 与回归审查；两项完成后重跑完整 Smoke Test（含带行情负载的持续观察）。
 3. ~~PR #4 与 PR #5 的合并顺序~~：PR #4 已关闭为被 #5 取代；PR #5 待独立审查后由负责人决定合并。
-4. P-17（slow consumer）是否单独立项，待负责人决定。
+4. ~~P-17 立项~~：已登记 Issue #8，作为后续独立性能研究，不在本轮修复范围。
 
 ### 20.2 复现命令
 
@@ -626,3 +652,4 @@ bash scripts/poc/day0-docker-smoke.sh teardown
 - S09 的 PASS 明确限定为“经回退路径、外部层”；S12 的 PASS 明确限定为“空闲进程”。
 - 外部接口可达不等于应用功能可用：S11 单独在应用内部验证，结果按 Polymarket / Binance 分别记录。
 - 未修改业务代码、go.mod、go.sum；未为了让矩阵变绿而绕过任何限制。
+- 2026-11-28 按审查意见 R01–R03 只修正了报告措辞与统计，`evidence/` 下的原始实验输出未作任何修改。
