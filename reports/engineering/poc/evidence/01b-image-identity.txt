@@ -1,0 +1,53 @@
+===== IMAGE IDENTITY (2026-11-28T08:17:22Z) =====
+568:#11 2.221 /tmp/go1.27.4.linux-arm64.tar.gz: OK
+569:#11 2.221 [go-toolchain] checksum VERIFIED -> 允许解压
+574:#11 3.186 go version go1.27.4 linux/arm64
+596:#16 0.094 go.mod: OK
+597:#16 0.094 go.sum: OK
+599:#16 0.094 [deps] go.mod / go.sum unchanged
+642:[build exit=0 elapsed=55s end=2026-11-28T08:17:05Z]
+$ docker image inspect polymarket-engineering-lab:day0 --format Id={{.Id}}
+Id=sha256:54d8f544443779603d71ee6ffb4f5935a69926e03c39113f4e64f11f9d551270
+[exit=0]
+$ docker image inspect polymarket-engineering-lab:day0 --format RepoDigests={{.RepoDigests}} Arch={{.Architecture}} Os={{.Os}} Variant={{.Variant}} Size={{.Size}} Created={{.Created}}
+RepoDigests=[polymarket-engineering-lab@sha256:54d8f544443779603d71ee6ffb4f5935a69926e03c39113f4e64f11f9d551270] Arch=arm64 Os=linux Variant= Size=60262523 Created=2026-11-28T08:17:05.176961552Z
+[exit=0]
+$ docker image inspect polymarket-engineering-lab:day0 --format {{json .Config.Env}} User={{.Config.User}} Entrypoint={{.Config.Entrypoint}} Exposed={{json .Config.ExposedPorts}}
+["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","DEBIAN_FRONTEND=noninteractive","DB_PATH=/app/data/trades.db","BOT_DB_PATH=/app/data/bot.db","HOST=0.0.0.0","PORT=8090","TRADING_MODE=simulation","ENABLE_MAIN_STRATEGY=false","ENABLE_PATTERN_STRATEGY=false","SNIPER_MODE=false"] User=app Entrypoint=[/app/polymarket-tool] Exposed={"8090/tcp":{}}
+[exit=0]
+$ docker run --rm --platform linux/arm64 --network none --entrypoint /bin/sh polymarket-engineering-lab:day0 -c grep -E "^(PRETTY_NAME|VERSION_ID)=" /etc/os-release; uname -m; id; ls -la /app; find / -xdev \( -name ".env*" -o -name "*.pem" -o -name "*.key" -o -name "*_real.yaml" -o -name "*.db" \) 2>/dev/null | grep -v -E "^/(proc|sys|usr/share|etc/ssl)" || echo "(no .env/.pem/.key/*_real.yaml/*.db found)"
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+VERSION_ID="24.04"
+aarch64
+uid=10001(app) gid=10001(app) groups=10001(app)
+total 27288
+drwxr-xr-x 1 app  app      4096 Nov 28 08:17 .
+drwxr-xr-x 1 root root     4096 Nov 28 08:17 ..
+drwxr-xr-x 2 app  app      4096 Nov 28 08:17 data
+drwxr-xr-x 2 app  app      4096 Nov 27 06:31 front
+drwxr-xr-x 2 app  app      4096 Nov 28 08:17 logs
+-rwxr-xr-x 1 app  app  27900336 Nov 28 08:17 polymarket-tool
+-rw-r--r-- 1 app  app     10573 Nov 27 06:31 strategy_config_3_sim.yaml
+-rw-r--r-- 1 app  app      7775 Nov 27 06:31 strategy_config_sim.yaml
+/usr/lib/ssl/cert.pem
+[exit=0]
+===== BUILDER STAGE (go version) =====
+$ docker build --platform linux/arm64 --progress=quiet --target builder -t polymarket-engineering-lab:day0-builder .
+sha256:45dbc3ebea22bd99ffa4012bc69e1b6671a1587a9c58465606c5d863889b325a
+[exit=0]
+$ docker run --rm --network none --entrypoint /usr/local/go/bin/go polymarket-engineering-lab:day0-builder version
+go version go1.27.4 linux/arm64
+[exit=0]
+$ docker run --rm --network none --entrypoint /usr/local/go/bin/go polymarket-engineering-lab:day0-builder env GOTOOLCHAIN GOFLAGS CGO_ENABLED GOARCH
+local
+-mod=readonly
+1
+arm64
+[exit=0]
+===== HOST go.mod/go.sum digest after build =====
+$ shasum -a 256 go.mod go.sum
+d69fcade2bf5c6b30a92a047ed9a8ba391b07638d9c76d875e2f1134750f0f50  go.mod
+d8e4cba1de51a8717f59eaed3977db8ad32c2f220e59a41b171125ea806556db  go.sum
+[exit=0]
+$ git diff --stat origin/main -- go.mod go.sum
+[exit=0]

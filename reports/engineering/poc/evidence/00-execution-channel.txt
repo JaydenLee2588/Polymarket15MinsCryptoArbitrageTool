@@ -1,0 +1,117 @@
+M0 Day 0 — 执行通道实测证据
+采集时间：2026-11-28 (UTC)
+采集者：Claude Code 会话 (非 macOS 宿主机终端)
+Refs #3
+
+=== 通道 A：device_bash（挂载了项目目录的 Linux 沙箱 VM）===
+$ uname -a
+Linux claude 6.8.0-149-generic #149~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Wed Oct 28 21:13:09 UTC  aarch64 aarch64 aarch64 GNU/Linux
+
+$ whoami; id
+rcw-01eufdn1squebk9vygjpxwks
+uid=1002(rcw-...) gid=1002(rcw-...) groups=1002(rcw-...)
+
+$ which docker
+(无输出)
+$ docker version
+bash: line 2: docker: command not found
+$ docker context show
+bash: line 4: docker: command not found
+[exit=127]
+$ ls -la /var/run/docker.sock
+ls: cannot access '/var/run/docker.sock': No such file or directory
+$ ls -la $HOME/.docker
+ls: cannot access '.../.docker': No such file or directory
+$ echo "[$DOCKER_HOST]"
+[]
+$ which go
+(无输出 — go: command not found)
+
+外网探测（curl --max-time 15，http=000 表示连接失败）：
+  https://go.dev/dl/                                     http=000
+  https://dl.google.com/go/go1.24.1.linux-arm64.tar.gz   http=000
+  https://proxy.golang.org/                              http=000
+  https://api.binance.com/api/v3/ping                    http=000
+  https://fapi.binance.com/fapi/v1/ping                  http=000
+  https://gamma-api.polymarket.com/markets?limit=1       http=000
+  https://clob.polymarket.com/                           http=000
+  https://api.github.com/                                http=200
+  https://github.com/                                    http=200
+
+$ ssh -T git@github.com
+ssh: Could not resolve hostname github.com: Temporary failure in name resolution
+
+结论：无 Docker CLI、无 daemon、无 socket、无 Go 工具链且无法下载；
+出口白名单仅 GitHub HTTPS；SSH 不可用（仓库 remote 为 git@github.com）。
+
+=== 通道 B：Claude 云容器（无项目目录挂载）===
+$ uname -m
+x86_64
+$ go version
+go version go1.24.7 linux/amd64
+$ docker version
+Client: Docker Engine - Community
+ Version:           29.9.3
+ API version:       1.56
+ OS/Arch:           linux/amd64
+ Context:           default
+failed to connect to the docker API at unix:///var/run/docker.sock; check if the
+path is correct and if the daemon is running: dial unix /var/run/docker.sock:
+connect: no such file or directory
+$ docker info | tail
+Server:
+failed to connect to the docker API at unix:///var/run/docker.sock ...
+
+外网探测（出口代理返回 403 = 该主机不在本会话白名单）：
+  https://api.binance.com/api/v3/ping          curl: (56) CONNECT tunnel failed, response 403
+  https://fapi.binance.com/fapi/v1/ping        curl: (56) CONNECT tunnel failed, response 403
+  https://gamma-api.polymarket.com/markets     curl: (56) CONNECT tunnel failed, response 403
+  https://clob.polymarket.com/                 curl: (56) CONNECT tunnel failed, response 403
+  https://dl.google.com/go/                    curl: (56) CONNECT tunnel failed, response 403
+  https://go.dev/dl/                           curl: (56) CONNECT tunnel failed, response 403
+  https://proxy.golang.org/                    curl: (6) Could not resolve host
+
+结论：有 Docker CLI 但无 daemon；有 Go 但无法获取模块依赖；
+Binance / Polymarket 均被出口策略拒绝。
+
+=== 未执行的动作（按 §5 要求）===
+- 未安装第二个 Docker daemon
+- 未暴露 Docker TCP 管理端口
+- 未挂载 Docker socket
+- 未进行权限提升
+- 未修改任何业务代码
+- 未改动此前未提交的 reports/engineering/baseline/ 与 tmp/
+
+=== Git 基线（采集时）===
+$ git rev-parse --show-toplevel
+<repo root>
+$ git branch --show-current
+baseline/m0-day1-environment-baseline
+$ git rev-parse HEAD
+12e98295a3676eea5c292536654645a525b254e5
+$ git ls-remote https://github.com/JaydenLee2588/Polymarket15MinsCryptoArbitrageTool.git HEAD
+492ee885d5042ec60539c09ca38c9a7754c81070	HEAD
+  （匿名 HTTPS 即可读取 -> 仓库为公开仓库）
+$ git status --short
+ M docs/engineering/CURRENT_STATUS.md
+?? reports/engineering/baseline/dependency-preparation.md
+?? reports/engineering/baseline/environment-baseline.md
+?? reports/engineering/baseline/gate0-handover.md
+?? reports/engineering/baseline/isolation-evidence.md
+?? reports/engineering/baseline/scripts/
+?? reports/engineering/baseline/side-effect-audit.md
+?? reports/engineering/baseline/test-matrix.md
+?? tmp/
+
+=== 复检 (2026-11-28 07:0x UTC，负责人要求继续执行后) ===
+通道 A (device_bash):
+  $ command -v docker            -> 空 (docker: still not installed)
+  $ ls -la /var/run/docker.sock  -> No such file or directory
+  $ curl https://go.dev/dl/go1.27.4.linux-arm64.tar.gz  -> http=000
+通道 B (云容器):
+  $ docker info | sed -n '/^Server/,$p'
+  Server:
+  failed to connect to the docker API at unix:///var/run/docker.sock ...
+
+结论不变：两个通道仍然没有可达的 Docker daemon。
+S01–S14 仍然必须在 macOS 宿主机终端执行。

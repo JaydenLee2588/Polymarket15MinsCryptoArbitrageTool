@@ -1,0 +1,21 @@
+$ docker build --platform linux/arm64 --progress=plain -t polymarket-engineering-lab:day0 .
+start=2026-11-28T08:03:55Z HEAD=492ee885d5042ec60539c09ca38c9a7754c81070 branch=poc/m0-day0-docker-smoke
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 6.11kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 ERROR: lease does not exist: not found
+------
+ > resolve image config for docker-image://docker.io/docker/dockerfile:1:
+------
+Dockerfile:1
+--------------------
+   1 | >>> # syntax=docker/dockerfile:1
+   2 |     # =============================================================================
+   3 |     # M0 Day 0 PoC — Ubuntu 24.04 / ARM64 smoke-test image
+--------------------
+ERROR: failed to build: failed to solve: failed to resolve source metadata for docker.io/docker/dockerfile:1: lease does not exist: not found
+[build exit=1 elapsed=704s end=2026-11-28T08:15:39Z]

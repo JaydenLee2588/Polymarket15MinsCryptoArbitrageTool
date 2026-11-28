@@ -1,0 +1,47 @@
+
+===== CONTINUOUS OBSERVATION 15 MINUTES (real elapsed time, recorded) (2026-11-28T08:23:53Z) =====
+start: 2026-11-28T08:23:53Z
+[2026-11-28T08:24:53Z] t+1m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:25:54Z] t+2m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:26:55Z] t+3m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:27:57Z] t+4m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:28:58Z] t+5m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:29:59Z] t+6m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:31:00Z] t+7m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:32:01Z] t+8m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:33:02Z] t+9m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:34:04Z] t+10m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:35:05Z] t+11m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:36:06Z] t+12m running=true exit=0 restarts=0 | 0.00% 16.77MiB / 7.75GiB | health=200
+[2026-11-28T08:37:07Z] t+13m running=true exit=0 restarts=0 | 0.00% 16.91MiB / 7.75GiB | health=200
+[2026-11-28T08:38:08Z] t+14m running=true exit=0 restarts=0 | 0.00% 16.92MiB / 7.75GiB | health=200
+[2026-11-28T08:39:09Z] t+15m running=true exit=0 restarts=0 | 0.00% 16.92MiB / 7.75GiB | health=200
+end: 2026-11-28T08:39:10Z
+
+===== LOG AFTER OBSERVATION (error/repeat check) (2026-11-28T08:39:10Z) =====
+$ docker logs polymarket-lab-day0 --tail 120
+2026/11/28 08:18:31 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 08:18:31 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 08:18:31 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0318.log
+2026/11/28 08:18:31 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 08:18:31 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 08:18:31 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 08:18:31 📝 API 测试页面: http://0.0.0.0:8090/api/
+[exit=0]
+
+===== SQLITE FILES AFTER OBSERVATION (2026-11-28T08:39:10Z) =====
+$ docker exec polymarket-lab-day0 ls -la /app/data /app/logs
+/app/data:
+total 80
+drwxr-xr-x 1 app app  4096 Nov 28 08:18 .
+drwxr-xr-x 1 app app  4096 Nov 28 08:17 ..
+-rw-r--r-- 1 app app  4096 Nov 28 08:18 trades.db
+-rw-r--r-- 1 app app 32768 Nov 28 08:18 trades.db-shm
+-rw-r--r-- 1 app app 28872 Nov 28 08:18 trades.db-wal
+
+/app/logs:
+total 16
+drwxr-xr-x 1 app app 4096 Nov 28 08:18 .
+drwxr-xr-x 1 app app 4096 Nov 28 08:17 ..
+drwxr-xr-x 2 app app 4096 Nov 28 08:18 20261128
+[exit=0]

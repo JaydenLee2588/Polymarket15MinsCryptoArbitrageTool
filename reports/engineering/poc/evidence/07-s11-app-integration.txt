@@ -1,0 +1,123 @@
+===== S11 APP-INTERNAL MARKET DATA (approved by owner 2026-11-28) (2026-11-28T09:18:44Z) =====
+image=sha256:54d8f544443779603d71ee6ffb4f5935a69926e03c39113f4e64f11f9d551270
+$ docker run -d --name polymarket-lab-day0-s11 -p 127.0.0.1:8091:8090 [same LAB_ENV as smoke script: TRADING_MODE=simulation ENABLE_MAIN_STRATEGY=false ENABLE_PATTERN_STRATEGY=false SNIPER_MODE=false, all credential vars empty]
+b9b167540558a6edb62eeb8847d970b75fd9c8463b9a01eecb30ccd20717d934
+--- env check ---
+BUILDER_KEY=
+ENABLE_MAIN_STRATEGY=false
+ENABLE_PATTERN_STRATEGY=false
+POLYMARKET_PRIVATE_KEY=
+SNIPER_MODE=false
+TRADING_MODE=simulation
+--- sim-stats before ---
+{"success":true,"data":{"2":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0}},"summary":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0},"config_breakdown":{}}
+
+--- unauth check: POST without op code (expect 401) ---
+http=401
+$ curl -X POST -H 'X-Operation-Code: <REDACTED>' 'http://127.0.0.1:8091/api/v1/sim-copy-trading?type=2'   (2026-11-28T09:18:51Z)
+{"config_count":1,"message":"Started Simulation (Background)","status":"success","timestamp":"2026-11-28T09:18:51.251434878Z","type":"2"}
+
+http=200
+--- observing 120s ---
+[2026-11-28T09:19:21Z] t+30s running=true health=200
+[2026-11-28T09:19:51Z] t+60s running=true health=200
+[2026-11-28T09:20:21Z] t+90s running=true health=200
+[2026-11-28T09:20:51Z] t+120s running=true health=200
+$ curl -X POST -H 'X-Operation-Code: <REDACTED>' 'http://127.0.0.1:8091/api/v1/sim-stop-trading'   (2026-11-28T09:20:51Z)
+{"message":"Copy trading stopped successfully","status":"success","timestamp":"2026-11-28T09:20:51.596928504Z"}
+
+http=200
+--- sim-stats after ---
+{"success":true,"data":{"2":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0}},"summary":{"trade_count":0,"total_pnl":0,"win_count":0,"win_rate":0},"config_breakdown":{}}
+
+--- full application log ---
+2026/11/28 09:18:45 ⚠️ 加载 .env 文件失败: open .env: no such file or directory (使用系统环境变量)
+2026/11/28 09:18:45 ✅ 数据库已初始化: /app/data/trades.db
+2026/11/28 09:18:45 📝 [TradeHistory] 日志文件已创建: logs/20261128/trade_history_0418.log
+2026/11/28 09:18:45 ℹ️ 未配置 TELEGRAM_BOT_TOKEN，跳过 Telegram Bot
+2026/11/28 09:18:45 ℹ️ Pattern 策略已禁用 (ENABLE_PATTERN_STRATEGY=false)
+2026/11/28 09:18:45 🚀 服务器启动在 http://0.0.0.0:8090
+2026/11/28 09:18:45 📝 API 测试页面: http://0.0.0.0:8090/api/
+2026/11/28 09:18:51 📊 [GetTradeStats] 查询结果: count=0, pnl=0.00, win=0
+2026/11/28 09:18:51 ⚠️ 无法加载配置文件 strategy_config.yaml: open strategy_config.yaml: no such file or directory，使用默认配置
+2026/11/28 09:18:51 ⏸️ Main 策略已禁用 (ENABLE_MAIN_STRATEGY=false)，仅维护市场状态供 Pattern 策略使用
+2026/11/28 09:18:51 ✅ 已初始化只读 ClobClient (用于模拟盘订单簿验证)
+2026/11/28 09:18:51 📡 市场监控已启动 - 1 个配置组 (Main 策略: 禁用/被动模式)
+2026/11/28 09:18:51 👁️ [监控配置][default]: 用于获取市场数据 (TrendWindow: 180-600s)
+2026/11/28 09:18:51 ℹ️ [API启动] Pattern 策略未启用 (ENABLE_PATTERN_STRATEGY!=true)
+2026/11/28 09:18:51 ✅ MarketManager 已初始化 (订单簿快照 + price_change 模式)
+2026/11/28 09:18:51 🔌 [Binance] 正在连接: wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/ethusdt@kline_15m/solusdt@kline_15m/xrpusdt@kline_15m/btcusdt@kline_1m/ethusdt@kline_1m/solusdt@kline_1m/xrpusdt@kline_1m
+2026/11/28 09:18:52 ✅ [Binance] WebSocket 已连接，监听 4 个交易对
+2026/11/28 09:18:52 ✅ [Binance] 预加载 BTCUSDT 1m K 线: 240 根
+2026/11/28 09:18:53 ✅ [Binance] 预加载 ETHUSDT 1m K 线: 240 根
+2026/11/28 09:18:53 ✅ [Binance] 预加载 SOLUSDT 1m K 线: 240 根
+2026/11/28 09:18:53 ✅ [Binance] 预加载 XRPUSDT 1m K 线: 240 根
+2026/11/28 09:18:53 ✅ 已连接到 Binance WS (监听 15m + 1m K线)
+2026/11/28 09:18:53 🔍 [Start] 执行初始市场扫描...
+2026/11/28 09:18:59 ✅ [Fallback] 从 Binance 获取 StrikePrice: XRPUSDT @ 09:15 = $0.94
+2026/11/28 09:18:59 🔄 [MarketManager] 检测到换届 (新增 8 个资产)，执行市场切换...
+2026/11/28 09:18:59 [RT] 📊 启动市场管理器，订阅 8 个资产
+2026/11/28 09:18:59 [RT] 获取初始快照成功: 25 bids, 28 asks
+2026/11/28 09:19:00 [RT] 获取初始快照成功: 28 bids, 24 asks
+2026/11/28 09:19:00 [RT] 获取初始快照成功: 21 bids, 40 asks
+2026/11/28 09:19:00 [RT] 获取初始快照成功: 40 bids, 22 asks
+2026/11/28 09:19:00 [RT] 获取初始快照成功: 52 bids, 47 asks
+2026/11/28 09:19:00 [RT] 获取初始快照成功: 47 bids, 52 asks
+2026/11/28 09:19:01 [RT] 获取初始快照成功: 39 bids, 60 asks
+2026/11/28 09:19:01 [RT] 获取初始快照成功: 60 bids, 39 asks
+2026/11/28 09:19:01 [RT] 正在连接到 wss://ws-subscriptions-clob.polymarket.com/ws/market
+2026/11/28 09:19:02 [RT] 已订阅 8 个资产 (market + book)
+2026/11/28 09:19:02 ✅ [MarketManager] 已启动，订阅 8 个资产
+2026/11/28 09:19:02 ✅ [Start] 初始扫描完成
+2026/11/28 09:19:02 🔍 [Start] 加载未决议交易...
+2026/11/28 09:19:02 📋 启动检查: 没有未决议的交易
+2026/11/28 09:19:02 ✅ [Start] 未决议交易加载完成
+2026/11/28 09:19:02 💓 [启动心跳] 策略已启动，进入主循环...
+2026/11/28 09:19:15 ⚠️ [RT] ⚠️ [RT] WebSocket 读取错误: websocket: close 1013: slow consumer: send buffer full
+2026/11/28 09:19:15 [RT] 🔄 开始重连流程...
+2026/11/28 09:19:15 [RT] 🔄 2s 后尝试重连...
+2026/11/28 09:19:17 [RT] 📥 重连中: 先拉取 REST 快照...
+2026/11/28 09:19:17 [RT] 📥 开始拉取 8 个资产的 REST 快照...
+2026/11/28 09:19:17 [RT] 获取初始快照成功: 24 bids, 29 asks
+2026/11/28 09:19:18 [RT] 获取初始快照成功: 29 bids, 24 asks
+2026/11/28 09:19:18 [RT] 获取初始快照成功: 21 bids, 40 asks
+2026/11/28 09:19:18 [RT] 获取初始快照成功: 40 bids, 22 asks
+2026/11/28 09:19:18 [RT] 获取初始快照成功: 42 bids, 57 asks
+2026/11/28 09:19:19 [RT] 获取初始快照成功: 57 bids, 42 asks
+2026/11/28 09:19:19 [RT] 获取初始快照成功: 46 bids, 53 asks
+2026/11/28 09:19:19 [RT] 获取初始快照成功: 53 bids, 46 asks
+2026/11/28 09:19:19 [RT] ✅ REST 快照拉取完成 (成功: 8/8，耗时: 1.853440584s)
+2026/11/28 09:19:19 [RT] 📥 REST 快照拉取完成，耗时: 1.853480667s
+2026/11/28 09:19:19 [RT] 🔌 正在建立 WebSocket 连接...
+2026/11/28 09:19:19 [RT] 正在连接到 wss://ws-subscriptions-clob.polymarket.com/ws/market
+2026/11/28 09:19:20 [RT] ✅ WebSocket 连接建立成功，耗时: 628.155375ms
+2026/11/28 09:19:20 [RT] 📡 正在重新订阅资产...
+2026/11/28 09:19:20 [RT] 已重新订阅 8 个资产 (market + book)
+2026/11/28 09:19:20 [RT] ✅ 重新订阅完成，耗时: 243.834µs
+2026/11/28 09:19:20 [RT] ✅ 重连成功 (快照→连接→订阅)
+2026/11/28 09:19:25 💓 [心跳] 活跃市场: 4, 等待决议: 0, Binance: 已连接, 最后更新: 0秒前, 回调数: 42934
+2026/11/28 09:19:53 ⚠️ [Binance] 连接僵死，60秒未收到消息，正在触发重连...
+2026/11/28 09:19:53 ⚠️ [Binance] 读取错误: read tcp 172.17.0.2:60918->16.76.20.104:443: use of closed network connection
+2026/11/28 09:19:55 💓 [心跳] 活跃市场: 4, 等待决议: 0, Binance: 已连接, 最后更新: 0秒前, 回调数: 135024
+2026/11/28 09:19:56 🔄 [Binance] 正在重连...
+2026/11/28 09:19:57 ✅ [Binance] 重连成功
+2026/11/28 09:19:57 ✅ [Binance] 健康检查触发的重连成功
+2026/11/28 09:19:58 🔄 [Binance] 正在重连...
+2026/11/28 09:19:59 ✅ [Binance] 重连成功
+2026/11/28 09:20:25 💓 [心跳] 活跃市场: 4, 等待决议: 0, Binance: 已连接, 最后更新: 0秒前, 回调数: 203140
+2026/11/28 09:20:51 ⏸️ Main 策略已禁用 (ENABLE_MAIN_STRATEGY=false)，仅维护市场状态供 Pattern 策略使用
+2026/11/28 09:20:51 🛑 已发送停止信号，等待模拟循环退出...
+2026/11/28 09:20:51 🛑 收到停止信号，正在清理资源...
+2026/11/28 09:20:51 [RT] ✅ 主动关闭 WS 连接 (停止读取)
+2026/11/28 09:20:51 [RT] 📊 市场管理器已停止
+2026/11/28 09:20:51 ✅ MarketManager 已停止
+2026/11/28 09:20:51 ⚠️ [Binance] 读取错误: read tcp 172.17.0.2:45560->16.76.20.104:443: use of closed network connection
+2026/11/28 09:20:51 🔌 [Binance] WebSocket 已关闭
+2026/11/28 09:20:51 ✅ Binance WebSocket 已关闭
+2026/11/28 09:20:51 🛑 策略模拟已完全停止，可重新启动
+2026/11/28 09:20:51 ✅ 模拟循环已确认退出
+2026/11/28 09:20:54 📊 [GetTradeStats] 查询结果: count=0, pnl=0.00, win=0
+--- graceful stop ---
+polymarket-lab-day0-s11
+ExitCode=0
+end=2026-11-28T09:20:54Z

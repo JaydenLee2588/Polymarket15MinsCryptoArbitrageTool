@@ -1,0 +1,46 @@
+
+===== CONTAINER-NETWORK PUBLIC MARKET-DATA PROBE (collect 30s per WS) (2026-11-28T08:20:45Z) =====
+$ docker build --platform linux/arm64 --progress=quiet --target builder -t polymarket-engineering-lab:day0-builder .
+sha256:99ead371b729880ee253c9d6afdbaf8731446a409fb427e35f94daa59cd487a9
+[exit=0]
+$ docker create --name polymarket-lab-day0-probe --platform linux/arm64 --workdir /src --entrypoint /usr/local/go/bin/go polymarket-engineering-lab:day0-builder run scripts/poc/wsprobe/main.go -seconds 30
+67b3a9057933dfa543ab1d85c6e9cd733cc09198de6fe1731b29f0c36d2508de
+[exit=0]
+$ docker cp scripts/poc/wsprobe/main.go polymarket-lab-day0-probe:/src/scripts/poc/wsprobe/main.go
+[exit=0]
+$ docker start -a polymarket-lab-day0-probe
+== S07 Binance REST (2026-11-28T08:21:08Z)
+GET api.binance.com/api/v3/klines BTCUSDT 15m -> http=200 rows=2 err=<nil>
+== S08 Binance futures WS (2026-11-28T08:21:09Z) collect=30s
+[APP] wss://fstream.binance.com/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade
+  handshake=101 msgs=0 first_msg_after=0s err=<nil>
+  sample=
+[DIAG] wss://fstream.binance.com/ws/btcusdt@aggTrade
+  handshake=101 msgs=0 first_msg_after=0s err=<nil>
+  sample=
+[DIAG] wss://fstream.binance.com/market/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade
+  handshake=101 msgs=338 first_msg_after=1.532s err=<nil>
+  sample={"stream":"btcusdt@kline_1m","data":{"e":"kline","E":1795854132515,"s":"BTCUSDT","k":{"t":1795854120000, "T":1795854179999, "s":"BTCUSDT", "i":"1m", "f":8352359570, "L":8352359931, "o":"59605.10", "c":"59588.00", "h":"59605.10", "l":"59588.00", "v":"9.279", "n":362, "x":false, "q":"553002.18870", "V...
+[DIAG] wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade
+  handshake=101 msgs=83 first_msg_after=2.227s err=<nil>
+  sample={"stream":"btcusdt@kline_1m","data":{"e":"kline","E":1795854164059,"s":"BTCUSDT","k":{"t":1795854120000,"T":1795854179999,"s":"BTCUSDT","i":"1m","f":6923787088,"L":6923788514,"o":"59631.27000000","c":"59649.67000000","h":"59649.68000000","l":"59614.81000000","v":"2.02273000","n":1427,"x":false,"q":"...
+RESULT S08: app-shape Binance WS URL delivered 0 messages
+== S09 Polymarket discovery (2026-11-28T08:23:12Z)
+GET gamma public-search q='btc updown 15m' active -> http=200 events=3 err=<nil>
+  slug=will-microstrategy-announce-holding-800k-btc-by-december-31-2026 active=true closed=false end=2027-01-01T05:00:00Z
+  slug=will-el-salvador-hold-1b-of-btc-by-by active=true closed=false end=2027-01-01T05:00:00Z
+  slug=microstrategy-announces-1000-btc-purchase-november-24-30-2026 active=true closed=false end=2026-12-01T05:00:00Z
+RESULT S09(app method public-search): no active *-updown-15m-* event returned
+GET gamma events?slug=btc-updown-15m-1795853700 (computed current window) -> http=200 events=1 err=<nil>
+  title="Bitcoin Up or Down - November 28, 3:15AM-3:30AM ET" acceptingOrders=true tokens=2
+== S10 Polymarket CLOB book REST (2026-11-28T08:23:14Z) slug=btc-updown-15m-1795853700
+GET clob.polymarket.com/book?token_id=<tok0> -> http=200 bids=23 asks=76 err=<nil>
+== S10 Polymarket CLOB market WS (2026-11-28T08:23:14Z) collect=30s
+handshake=101 msgs=9453 first_msg_after=945ms err=<nil>
+sample=[{"market":"0x0c4581139c9a5ff9eb26337e0fbb966e198c84e058b08c78456f20a3421e7c5c","asset_id":"27692772228715623848875365636302397773227367089972028061877489467707193375993","timestamp":"1795854195435","hash":"3cb2d92903058dac5832bf6c2e06ca2bd9e36bc3","bids":[{"price":"0.01","size":"1120"},{"price":"0....
+== done (2026-11-28T08:23:45Z)
+exit status 1
+[exit=1]
+$ docker rm polymarket-lab-day0-probe
+polymarket-lab-day0-probe
+[exit=0]

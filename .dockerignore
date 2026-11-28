@@ -1,0 +1,70 @@
+# =============================================================================
+# Docker 构建上下文排除清单 — Refs #3
+# 目标：真实凭证、生产数据、实验产物一律不得进入构建上下文或镜像。
+# =============================================================================
+
+# --- 版本控制 ---
+.git
+.gitignore
+
+# --- 凭证 / 配置 ---
+# .env           真实运行配置
+# .env.example   已确认包含原作者真实的 BUILDER_* API 凭证（已提交到公开仓库），
+#                严禁进入镜像
+# .env.lab*      本地实验配置（可能含实验钱包私钥）
+.env
+.env.*
+*.env
+.envrc
+*.pem
+*.key
+*.p12
+*.keystore
+secrets/
+.ssh/
+
+# --- 生产 / 实验数据库 ---
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# --- 日志 ---
+logs/
+*.log
+
+# --- 实验与临时产物 ---
+tmp/
+reports/
+docs/
+*.out
+*.test
+*.prof
+coverage*
+
+# --- 本地 Go 缓存 / 构建产物 ---
+vendor/
+.gocache/
+.gomodcache/
+go/pkg/
+polymarket-tool
+Polymarket15MinsCryptoArbitrageTool
+
+# --- 真实交易配置（纵深防御：不进入上下文） ---
+strategy_config_real.yaml
+strategy_config_3_real.yaml
+
+# --- 平台 / 编辑器噪音 ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Docker 自身 ---
+Dockerfile
+.dockerignore

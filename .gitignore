@@ -28,3 +28,8 @@ logs/
 
 # MacOS
 .DS_Store
+
+# Lab experiment config (may contain throwaway keys) - Refs #3
+.env.lab
+.env.lab.*
+!.env.lab.example
